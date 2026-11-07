@@ -1,0 +1,31 @@
+appId: com.personalpacs.workstation
+productName: Personal PACS
+copyright: Copyright © 2026
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+asarUnpack: []
+win:
+  icon: build/icon.png
+  executableName: PersonalPACS
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Personal PACS
+  artifactName: PersonalPACS-Setup-${version}.${ext}
+  deleteAppDataOnUninstall: false
+portable:
+  artifactName: PersonalPACS-Portable-${version}.${ext}
+npmRebuild: false

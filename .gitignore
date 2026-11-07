@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+# Local test data and app data must never be committed (may contain patient information)
+test-data/
+*.dcm
+DICOMDIR
+src/renderer/public/wasm/
