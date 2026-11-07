@@ -9,3 +9,4 @@ test-data/
 *.dcm
 DICOMDIR
 src/renderer/public/wasm/
+__pycache__/
