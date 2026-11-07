@@ -3,7 +3,7 @@ import type { WebContents } from 'electron'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import type { EditCommand, ImportResult, KeyImage, ReportSaveInput, Settings, StudyFilter } from '@shared/types'
+import type { EditCommand, ImportResult, KeyImage, ReportSaveInput, Settings, SpeechModelId, StudyFilter } from '@shared/types'
 import { Db } from './db'
 import { Importer } from './importer'
 import { ensureDataPaths, saveDataDir } from './paths'
@@ -11,6 +11,8 @@ import type { DataPaths } from './paths'
 import { buildReportHtml, defaultPdfName, printHtml, renderPdf } from './print'
 import { DICOM_BASE_URL, handleAppScheme, registerAppScheme } from './protocol'
 import { seedIfEmpty } from './seed'
+import { SpeechService } from './speech'
+import { getSpeechModel } from './speechModels'
 import { buildSeriesImages, sortInstances } from './sortImages'
 import { createMainWindow, createViewerWindow } from './windows'
 
@@ -19,6 +21,7 @@ registerAppScheme()
 let paths: DataPaths
 let db: Db
 let importer: Importer
+let speech: SpeechService
 let mainWin: BrowserWindow | null = null
 let viewerWin: BrowserWindow | null = null
 let viewerReady = false
@@ -179,6 +182,28 @@ function registerIpc(): void {
     else if (cmd === 'paste') wc.paste()
     else if (cmd === 'selectAll') wc.selectAll()
   })
+  // ---------------- speech / dictation
+  const asModel = (v: unknown): SpeechModelId => {
+    if (typeof v !== 'string' || !getSpeechModel(v)) throw new Error('Unknown speech model')
+    return v as SpeechModelId
+  }
+  ipcMain.handle('speech:status', () => speech.status())
+  ipcMain.handle('speech:install', (_e, id: unknown) => speech.installModel(asModel(id)))
+  ipcMain.handle('speech:cancelInstall', () => speech.cancelInstall())
+  ipcMain.handle('speech:remove', (_e, id: unknown) => speech.removeModel(asModel(id)))
+  ipcMain.handle('speech:start', (_e, id: unknown, pauseMs: unknown) =>
+    speech.start(asModel(id), Math.min(2000, Math.max(250, Number(pauseMs) || 600)))
+  )
+  ipcMain.handle('speech:stop', () => speech.stop())
+  ipcMain.on('speech:audio', (_e, samples: unknown) => {
+    if (samples instanceof Float32Array) speech.audio(samples)
+  })
+  // F4 / mic button in the viewer controls dictation in the report window.
+  ipcMain.handle('dictation:toggle', () => {
+    mainWin?.webContents.send('dictation:toggle')
+  })
+  ipcMain.on('dictation:active', (_e, active: unknown) => broadcast('dictation:active', !!active))
+
   ipcMain.handle('window:fullscreen', (e, on: boolean) => {
     senderWindow(e.sender)?.setFullScreen(!!on)
   })
@@ -326,6 +351,9 @@ app.whenReady().then(() => {
   seedIfEmpty(db)
   handleAppScheme(join(__dirname, '../renderer'), () => paths.archiveDir)
   importer = new Importer(db, paths.archiveDir, (p) => broadcast('import:progress', p))
+  speech = new SpeechService(join(paths.dataDir, 'speech'), join(__dirname, 'speechWorker.js'), (e) =>
+    broadcast('speech:event', e)
+  )
   registerIpc()
   mainWin = createMainWindow()
   mainWin.on('closed', () => {
@@ -340,6 +368,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  speech?.shutdown()
   try {
     db?.close()
   } catch {

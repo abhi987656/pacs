@@ -19,6 +19,8 @@ import {
   Hand,
   Info,
   Link2,
+  Mic,
+  MicOff,
   Move,
   Pause,
   Play,
@@ -163,6 +165,7 @@ export function ViewerApp() {
   const [mprLoading, setMprLoading] = useState<string | null>(null)
   const [slab, setSlab] = useState(0)
   const [help, setHelp] = useState(false)
+  const [dictating, setDictating] = useState(false)
   const gridRef = useRef<HTMLDivElement>(null)
 
   // Refs so event handlers always see the latest state.
@@ -277,6 +280,7 @@ export function ViewerApp() {
       void openStudy(id)
     }
   }, [ready, openStudy])
+  useEvent(api.onDictationActive, (on: boolean) => setDictating(on))
   useEvent(api.onStudiesChanged, () => {
     if (currentStudyId == null) return
     void api.getPriors(currentStudyId).then((pri) => setStudies((s) => (s.length ? [s[0], ...pri] : s)))
@@ -639,7 +643,8 @@ export function ViewerApp() {
       if (document.querySelector('.modal-backdrop')) return
       const k = e.key
       const lower = k.toLowerCase()
-      if (k === 'ArrowUp' || k === 'ArrowLeft') scrollActive(-1)
+      if (k === 'F4') void api.toggleDictation()
+      else if (k === 'ArrowUp' || k === 'ArrowLeft') scrollActive(-1)
       else if (k === 'ArrowDown' || k === 'ArrowRight') scrollActive(1)
       else if (k === 'PageUp') scrollActive(-10)
       else if (k === 'PageDown') scrollActive(10)
@@ -890,6 +895,9 @@ export function ViewerApp() {
           <CircleHelp size={17} />
         </VBtn>
         <div className="spacer" />
+        <VBtn title="Dictate into the report (F4)" on={dictating} onClick={() => void api.toggleDictation()}>
+          {dictating ? <Mic size={17} /> : <MicOff size={17} />} {dictating ? 'Dictating…' : 'Dictate'}
+        </VBtn>
         <VBtn title="Open the report for this study" onClick={() => currentStudyId != null && void api.openReportFor(currentStudyId)} disabled={currentStudyId == null}>
           <FileText size={17} /> Report
         </VBtn>
@@ -946,6 +954,7 @@ export function ViewerApp() {
                 ['C', 'Compare with previous study'],
                 ['Space', 'Cine play / pause'],
                 ['K', 'Send key image to the report'],
+                ['F4', 'Start / stop dictation into the report'],
                 ['Tab', 'Next viewport'],
                 ['Double-click', 'Maximise / restore a viewport']
               ].map(([k, v]) => (

@@ -15,7 +15,8 @@
     "dist:win": "npm run build && electron-builder --win --x64 --publish never"
   },
   "dependencies": {
-    "dicom-parser": "^1.8.21"
+    "dicom-parser": "^1.8.21",
+    "sherpa-onnx-node": "^2.0.1"
   },
   "devDependencies": {
     "@cornerstonejs/core": "^5.15.2",
@@ -43,7 +44,9 @@
     "lucide-react": "^1.70.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "tar-stream": "^2.2.0",
     "typescript": "^5.9.3",
+    "unbzip2-stream": "^1.4.3",
     "vite": "^8.3.6"
   },
   "author": "Personal PACS",

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Database, FolderOpen, HardDriveDownload, Save, Trash, Upload } from 'lucide-react'
+import { Database, FolderOpen, HardDriveDownload, Mic, Plus, Save, Trash, Upload } from 'lucide-react'
 import type { DataInfo, Settings } from '@shared/types'
 import { useUi } from '../common/ui'
 import { FONT_FAMILIES, FONT_SIZES } from './editor'
+import { SpeechModelsPanel } from './DictationControl'
 
 const api = window.api
 
@@ -21,10 +22,17 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
   const ui = useUi()
   const [s, setS] = useState<Settings>(settings)
   const [info, setInfo] = useState<DataInfo | null>(null)
+  const [mics, setMics] = useState<MediaDeviceInfo[]>([])
+  const [repFrom, setRepFrom] = useState('')
+  const [repTo, setRepTo] = useState('')
 
   useEffect(() => setS(settings), [settings])
   useEffect(() => {
     void api.getDataInfo().then(setInfo)
+    void navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((d) => setMics(d.filter((x) => x.kind === 'audioinput' && x.deviceId !== 'default' && x.deviceId !== 'communications')))
+      .catch(() => {})
   }, [])
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setS((x) => ({ ...x, [k]: v }))
@@ -172,6 +180,84 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
               </label>
             </Field>
           </div>
+        </section>
+
+        <section className="card">
+          <h3>
+            <Mic size={15} /> Dictation (offline speech recognition)
+          </h3>
+          <p className="muted">
+            Press <b>F4</b> in the report (or in the viewer) and speak. Text appears after each short pause. Everything runs on
+            this computer – no internet needed after the model is downloaded.
+          </p>
+          <SpeechModelsPanel
+            selected={s.dictationModel}
+            onSelect={(id) => {
+              set('dictationModel', id)
+              void api.saveSettings({ ...s, dictationModel: id }).then(onSaved)
+            }}
+          />
+          <div className="grid2" style={{ marginTop: 12 }}>
+            <Field label="Microphone">
+              <select value={s.dictationMicId} onChange={(e) => set('dictationMicId', e.target.value)}>
+                <option value="">Windows default microphone</option>
+                {mics.map((m) => (
+                  <option key={m.deviceId} value={m.deviceId}>
+                    {m.label || 'Microphone'}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label={`Pause that ends a phrase: ${(s.dictationPauseMs / 1000).toFixed(1)} s`} hint="Shorter = text appears sooner; longer = fewer broken sentences.">
+              <input type="range" min={300} max={1500} step={100} value={s.dictationPauseMs} onChange={(e) => set('dictationPauseMs', Number(e.target.value))} />
+            </Field>
+            <Field label="Voice commands">
+              <label className="check-line">
+                <input type="checkbox" checked={s.dictationCommands} onChange={(e) => set('dictationCommands', e.target.checked)} /> Understand
+                spoken commands
+              </label>
+              <small className="muted">
+                "full stop", "comma", "semicolon", "colon" (at the end), "question mark", "open/close bracket", "hyphen", "slash",
+                "new line", "new paragraph", "delete that", "macro &lt;code&gt;", "template &lt;name&gt;", "stop dictation".
+                Numbers like "12 by 8 millimeters" become "12 x 8 mm".
+              </small>
+            </Field>
+            <Field label="Corrections (words the computer keeps getting wrong)">
+              <div className="reps">
+                {s.dictationReplacements.map((r, i) => (
+                  <div key={i} className="rep-row">
+                    <span className="rep-from">{r.from}</span>
+                    <span className="muted">→</span>
+                    <span className="rep-to">{r.to}</span>
+                    <button
+                      className="icon-btn"
+                      title="Remove"
+                      onClick={() => set('dictationReplacements', s.dictationReplacements.filter((_, j) => j !== i))}
+                    >
+                      <Trash size={14} />
+                    </button>
+                  </div>
+                ))}
+                <div className="rep-row">
+                  <input placeholder="heard as…" value={repFrom} onChange={(e) => setRepFrom(e.target.value)} />
+                  <span className="muted">→</span>
+                  <input placeholder="write instead" value={repTo} onChange={(e) => setRepTo(e.target.value)} />
+                  <button
+                    className="btn btn-small"
+                    disabled={!repFrom.trim()}
+                    onClick={() => {
+                      set('dictationReplacements', [...s.dictationReplacements, { from: repFrom.trim(), to: repTo.trim() }])
+                      setRepFrom('')
+                      setRepTo('')
+                    }}
+                  >
+                    <Plus size={14} /> Add
+                  </button>
+                </div>
+              </div>
+            </Field>
+          </div>
+          <p className="muted small">Remember to click “Save settings” after changing the microphone, pause, commands or corrections.</p>
         </section>
 
         <section className="card">

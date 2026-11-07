@@ -106,7 +106,9 @@ export function createMainWindow(): BrowserWindow {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
-      spellcheck: true
+      spellcheck: true,
+      // Keep dictation running while the viewer window has the focus.
+      backgroundThrottling: false
     }
   })
   win.setMenuBarVisibility(false)

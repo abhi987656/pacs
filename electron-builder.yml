@@ -8,7 +8,9 @@ files:
   - out/**/*
   - package.json
   - '!**/*.map'
-asarUnpack: []
+asarUnpack:
+  # native speech-recognition engine (sherpa-onnx + onnxruntime libraries)
+  - node_modules/sherpa-onnx-*/**
 win:
   icon: build/icon.png
   executableName: PersonalPACS

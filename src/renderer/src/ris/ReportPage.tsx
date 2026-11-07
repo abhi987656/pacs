@@ -27,6 +27,7 @@ import {
 import { Modal, Panel, useEvent, useUi } from '../common/ui'
 import { buildExtensions, fillPlaceholders, findNext, insertMacroText, replaceAll, replaceCurrent } from './editor'
 import { Ribbon } from './Ribbon'
+import { DictationControl } from './DictationControl'
 
 const api = window.api
 const MODALITY_OPTIONS = ['CT', 'MR', 'CR', 'DX', 'US', 'MG', 'PT', 'NM', 'XA', 'RF', 'OT']
@@ -626,6 +627,15 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
                 ))}
               </datalist>
             </label>
+            <DictationControl
+              editor={editor}
+              settings={settings}
+              onSettingsChange={props.onSettingsChange}
+              readOnly={readOnly}
+              macros={macros}
+              templates={templates}
+              onTemplate={(t) => void applyTemplate(t)}
+            />
           </div>
 
           <Ribbon

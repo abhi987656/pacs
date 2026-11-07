@@ -14,6 +14,11 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          // Runs in a utility process: speech model download + recognition.
+          speechWorker: resolve('src/main/speechWorker.ts')
+        },
         // node:sqlite is built into Electron's Node runtime; never bundle it.
         external: ['node:sqlite', 'electron']
       }

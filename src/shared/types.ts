@@ -138,6 +138,16 @@ export interface Settings {
   autoOpenViewer: boolean
   autosaveSeconds: number
   showSignatureBlock: boolean
+  dictationModel: SpeechModelId
+  dictationMicId: string
+  dictationPauseMs: number
+  dictationCommands: boolean
+  dictationReplacements: DictationReplacement[]
+}
+
+export interface DictationReplacement {
+  from: string
+  to: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -159,8 +169,47 @@ export const DEFAULT_SETTINGS: Settings = {
   editorFontSize: '12pt',
   autoOpenViewer: true,
   autosaveSeconds: 60,
-  showSignatureBlock: true
+  showSignatureBlock: true,
+  dictationModel: 'parakeet-v2',
+  dictationMicId: '',
+  dictationPauseMs: 600,
+  dictationCommands: true,
+  dictationReplacements: []
 }
+
+// ------------------------------------------------------------------ speech recognition
+
+export type SpeechModelId = 'parakeet-v2' | 'whisper-base'
+
+export interface SpeechModelStatus {
+  id: SpeechModelId
+  name: string
+  description: string
+  downloadMB: number
+  installed: boolean
+}
+
+export interface SpeechInstallState {
+  modelId: SpeechModelId
+  phase: 'downloading' | 'unpacking'
+  progress: number // 0..1
+}
+
+export type SpeechEngineState = 'off' | 'loading' | 'ready' | 'listening' | 'error'
+
+export interface SpeechStatus {
+  models: SpeechModelStatus[]
+  install: SpeechInstallState | null
+  engine: SpeechEngineState
+  loadedModel: SpeechModelId | null
+  error: string | null
+}
+
+export type SpeechEvent =
+  | { type: 'status'; status: SpeechStatus }
+  | { type: 'text'; text: string }
+  | { type: 'speaking'; speaking: boolean }
+  | { type: 'pending'; count: number }
 
 export interface ImportProgress {
   running: boolean
@@ -226,6 +275,19 @@ export interface PacsApi {
   onOpenReport(cb: (studyId: number) => void): () => void
   editCommand(cmd: EditCommand): Promise<void>
   setFullScreen(on: boolean): Promise<void>
+  // speech / dictation
+  speechStatus(): Promise<SpeechStatus>
+  speechInstall(id: SpeechModelId): Promise<void>
+  speechCancelInstall(): Promise<void>
+  speechRemove(id: SpeechModelId): Promise<void>
+  speechStart(id: SpeechModelId, pauseMs: number): Promise<void>
+  speechStop(): Promise<void>
+  speechAudio(samples: Float32Array): void
+  onSpeechEvent(cb: (e: SpeechEvent) => void): () => void
+  toggleDictation(): Promise<void>
+  onToggleDictation(cb: () => void): () => void
+  dictationActive(active: boolean): void
+  onDictationActive(cb: (active: boolean) => void): () => void
   // reports
   getReport(studyId: number): Promise<Report | null>
   saveReport(input: ReportSaveInput): Promise<Report>

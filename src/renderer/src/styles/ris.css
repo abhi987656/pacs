@@ -959,3 +959,133 @@ table.grid .muted {
   padding: 2px;
   border-radius: 3px;
 }
+
+/* ================================================= dictation */
+.dictation {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 170px;
+  margin-left: auto;
+}
+.dict-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 16px;
+  border: 1px solid #5f7f74;
+  background: #2c4a3c;
+  color: #e9f5ee;
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dict-btn:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+.dict-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.dict-btn.on {
+  background: #b3302d;
+  border-color: #e06a67;
+  color: #fff;
+}
+.dict-btn.on.speaking {
+  box-shadow: 0 0 0 3px rgba(255, 90, 87, 0.35);
+}
+.dict-level {
+  height: 4px;
+  background: #13202a;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.dict-level > div {
+  height: 100%;
+  background: linear-gradient(90deg, #5fc77f, #e8c34a, #e05a57);
+  transition: width 0.08s;
+}
+.dict-heard {
+  position: absolute;
+  right: 18px;
+  bottom: 62px;
+  max-width: 46%;
+  background: rgba(20, 32, 42, 0.92);
+  border: 1px solid #3d5163;
+  border-left: 4px solid #e05a57;
+  color: #dfe8ee;
+  padding: 7px 12px;
+  border-radius: 5px;
+  font-style: italic;
+  z-index: 60;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.speech-models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.speech-model {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid #3c4f5c;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.modal .speech-model {
+  border-color: #c9d3da;
+}
+.speech-model.selected {
+  border-color: var(--green);
+  background: rgba(63, 155, 98, 0.12);
+}
+.speech-model input {
+  margin-top: 3px;
+}
+.speech-model-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.speech-model-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.error-text {
+  color: #ff8e8b;
+  margin: 4px 0 0;
+}
+.modal .error-text {
+  color: #b00020;
+}
+.reps {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.rep-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rep-row input {
+  flex: 1;
+  min-width: 0;
+}
+.rep-from,
+.rep-to {
+  flex: 1;
+  background: #1b2731;
+  border-radius: 3px;
+  padding: 3px 6px;
+}

@@ -36,6 +36,24 @@ your own PC or laptop.
 - Autosave, version history, spell check and Print / **PDF**. The printed report includes your
   letterhead, logo, patient table and signature.
 
+**Voice dictation** (offline – your voice never leaves the computer)
+- Press **F4** in the report, or in the viewer while looking at the images, and speak. The text
+  appears in the report after each short pause.
+- Runs on the computer's processor with the open-source sherpa-onnx engine. Choose a model in
+  **Settings → Dictation**; it downloads once:
+  - **Parakeet TDT 0.6B v2** by NVIDIA (460 MB). Recommended, the most accurate for medical words.
+  - **Whisper base** by OpenAI (200 MB). Smaller and lighter, but less accurate.
+- Voice commands:
+  - punctuation: "full stop", "comma", "semicolon", "colon" (at the end of a phrase), "question mark",
+    "open/close bracket", "hyphen", "slash"
+  - layout and editing: "new line", "new paragraph", "delete that"
+  - shortcuts: "macro nad", "template CECT abdomen", "stop dictation"
+- "12 by 8 millimeters" is written as "12 x 8 mm". Letters spelled out ("C B D") become "CBD".
+- **Corrections list**: if a word is often misheard, add "heard as → write instead" in
+  Settings → Dictation.
+- A good USB or headset microphone makes a big difference. Windows must allow desktop apps to use
+  the microphone (Settings → Privacy & security → Microphone).
+
 **Viewer window** (laid out like a hospital PACS; put it on a second monitor if you have one)
 - Study list with prior studies, series thumbnails, and drag-and-drop of series into viewports.
 - Layouts 1×1 to 2×3. Double-click a viewport to maximise it.
@@ -79,6 +97,7 @@ your own PC or laptop.
 | M / C | MPR / compare with prior |
 | Space | Cine |
 | K | Key image to report |
+| F4 | Start / stop dictation into the report |
 
 ## Your data
 
@@ -116,6 +135,10 @@ python scripts/make_test_data.py test-data
 - **TipTap** (MIT) is the report editor.
 - **SQLite** is the database, using Node's built-in `node:sqlite`, so there are no native modules to compile.
 - **dicom-parser** reads headers during import.
+- **sherpa-onnx** (Apache-2.0) runs offline speech recognition, using Silero VAD to split speech into
+  phrases. It runs in an Electron utility process (`src/main/speechWorker.ts`), so it can't freeze or
+  crash the app. Models download from the sherpa-onnx GitHub releases.
+- `src/renderer/src/ris/dictation.ts` holds the microphone capture, voice commands and text tidying.
 - `src/main`: database, import, archive protocol (`app://bundle/dicom/...`), print/PDF and IPC.
 - `src/preload`: the `window.api` bridge.
 - `src/renderer/src/ris`: worklist, report page, templates and settings.
@@ -125,5 +148,5 @@ python scripts/make_test_data.py test-data
 
 - Receive studies straight from scanners/PACS (DICOM C-STORE), and query/retrieve.
 - Anonymised export of teaching cases.
-- Offline voice dictation.
+- Custom medical vocabulary boosting for dictation.
 - 3D volume rendering and hanging protocols.
