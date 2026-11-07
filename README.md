@@ -16,6 +16,10 @@ your own PC or laptop.
 - Images are copied into a local archive, so the CD can be removed. Duplicates are skipped.
 - Search by name, patient ID, accession or study. Filter by modality, report status and date.
   Search inside report text, which is handy for teaching files.
+- **New Case** lets you report without images. Enter the patient name, CR No (patient ID),
+  PG No (accession), age/sex and study, then start reporting. If you import the CD later, images
+  with the same PG No attach to that case automatically.
+- Patient and study details can be corrected later with "Edit patient / study details" on the report page.
 
 **Reporting window** (laid out like a hospital RIS)
 - Patient banner: ID, name/sex/age, study, exam date, visit type, accession, referring doctor.
@@ -54,10 +58,15 @@ your own PC or laptop.
 - A good USB or headset microphone makes a big difference. Windows must allow desktop apps to use
   the microphone (Settings → Privacy & security → Microphone).
 
-**Viewer window** (laid out like a hospital PACS; put it on a second monitor if you have one)
+**Viewer window** (laid out like a hospital PACS, with mouse and hot keys like Fujifilm Synapse; put it on
+a second monitor if you have one)
 - Study list with prior studies, series thumbnails, and drag-and-drop of series into viewports.
 - Layouts 1×1 to 2×3. Double-click a viewport to maximise it.
-- Window/level presets on keys 1–9: abdomen, lung, bone, brain, mediastinum, liver, subdural, stroke and CTA.
+- Right-click opens an image tools menu with presets, tools, scale/rotate/flip, reference lines, tile
+  formats, linking, cine, MPR, save and copy.
+- Window/level presets on keys 1–9 or the number pad:
+  1 Body Soft Tissue, 2 Body Lung, 3 Body Bone, 4 Body Liver, 5 Head Mid Brain, 6 Head Post Fossa,
+  7 Head Blood, 8 Head Bone, 9 CTA MIP. The menu also has Head IAC, Stroke and Subdural.
 - Measurements: length, angle, ellipse/rectangle ROI (mean/SD HU, area), probe (HU), bidirectional and arrow.
 - Text overlay: patient and series details, W/L, slice location and thickness, kVp/mA, TR/TE,
   plus orientation markers.
@@ -84,20 +93,35 @@ your own PC or laptop.
 4. Choose a template, type or use macros, press **K** in the viewer for key images, then **Sign off**
    and **PDF** or **Print**.
 
-### Viewer shortcuts
+### Viewer mouse and shortcuts (Synapse style)
 
-| Key | Action |
+| Mouse / key | Action |
 | --- | --- |
-| Wheel / ↑ ↓ | Next / previous image |
-| Left / middle / right drag | Selected tool (W/L) / pan / zoom |
-| 1–9, 0 | Window presets, 0 = default |
-| W H Z S G | Window/level, pan, zoom, scroll, magnify |
-| L A E O P B T X | Length, angle, ellipse, rectangle, probe, bidirectional, arrow, eraser |
-| I F R | Invert, flip, reset |
-| M / C | MPR / compare with prior |
-| Space | Cine |
-| K | Key image to report |
-| F4 | Start / stop dictation into the report |
+| Left-drag | Window/level (left-right = width, up-down = level) |
+| Hold left + click right | Switch the drag between window/level → zoom → pan |
+| Right click | Image tools menu |
+| Wheel / middle-drag | Scroll through images |
+| Double-click the mouse wheel | Link window/level + zoom between tiles |
+| Alt+drag / Alt+Ctrl+drag / Alt+Shift+drag | Window/level / zoom / pan |
+| Shift+drag / Ctrl+drag | Move / copy a series to another tile |
+| R T A D | Ruler, text, arrow, density value (HU). One use, then back to window/level |
+| G F E O | Angle, freehand ROI, elliptical ROI, magnifying glass |
+| L / Esc | Lock the tool / back to window/level |
+| B | Bookmark: key image into the report |
+| S K C J | Linked scrolling on/off, add/remove tile, remove all, auto-link |
+| I | Link window/level + zoom between tiles |
+| Q / U | Lock / unlock reference lines |
+| = / - | Zoom to fit / zoom 1:1 |
+| N / M | Cine / MPR |
+| 1–9, number pad, 0 | Presets, 0 = original |
+| Home / End, PgUp / PgDn, arrows | First / last image, ±10, ±1 |
+| F5 | Reset the image |
+| Shift+T / Shift+A / Shift+I | Text overlay / annotations / invert |
+| Alt+C / Alt+Shift+C / Alt+X | Compare with next / previous prior study, close comparison |
+| Alt+S / Alt+A | Next / previous series |
+| Alt+I / Alt+N / Alt+R / Alt+E | Study info / notes / report / series picker |
+| Ctrl+C | Copy the image to the clipboard |
+| F4 | Dictation on/off |
 
 ## Your data
 

@@ -1,22 +1,22 @@
 :root {
-  --hdr1: #2d4356;
-  --hdr2: #1b2a37;
-  --rail: #16222d;
-  --ink: #e9eef2;
-  --ink-dim: #9fb0bd;
+  --hdr1: #141416;
+  --hdr2: #000000;
+  --rail: #000000;
+  --ink: #ececef;
+  --ink-dim: #9a9aa3;
   --panel-hdr: #3f9b62;
   --panel-hdr2: #358553;
   --panel-bg: #e3e8eb;
-  --panel-ink: #24323d;
-  --ribbon: #26343f;
-  --ribbon2: #1f2b34;
+  --panel-ink: #17171a;
+  --ribbon: #121214;
+  --ribbon2: #0a0a0b;
   --green: #3f9b62;
   --green-d: #2f7d4c;
   --red: #e0524f;
   --blue: #2f7bbf;
-  --gray: #5b6b78;
-  --line: #3a4a57;
-  --paper-bg: #c9d0d5;
+  --gray: #3a3a40;
+  --line: #2a2a2e;
+  --paper-bg: #2a2a2e;
   --focus: #59b0ff;
   color-scheme: dark;
 }
@@ -77,8 +77,8 @@ textarea:disabled {
   gap: 6px;
   padding: 6px 12px;
   border-radius: 4px;
-  border: 1px solid #6b7c88;
-  background: #465663;
+  border: 1px solid #3d3d44;
+  background: #26262b;
   color: #fff;
   cursor: pointer;
   white-space: nowrap;
@@ -99,8 +99,8 @@ textarea:disabled {
   border-color: #b33b39;
 }
 .btn-blue {
-  background: var(--blue);
-  border-color: #255f94;
+  background: #2a2a30;
+  border-color: #4a4a52;
 }
 .btn-gray {
   background: var(--gray);
@@ -264,7 +264,7 @@ textarea:disabled {
   pointer-events: none;
 }
 .toast {
-  background: #24323d;
+  background: #17171a;
   color: #fff;
   padding: 9px 14px;
   border-radius: 5px;
@@ -389,4 +389,71 @@ textarea:disabled {
 }
 .report-doc mark {
   padding: 0 1px;
+}
+
+/* ------------------------------------------------ smooth, calm UI */
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a40 transparent;
+}
+.table-wrap,
+.modal-content,
+.history-preview,
+.prior-report {
+  scrollbar-color: #b9b9bf transparent;
+}
+button,
+.btn,
+.icon-btn,
+.rail-btn,
+.rb-btn,
+.rb-tab,
+.v-btn,
+.v-thumb,
+.list-item,
+.side-panel-hdr,
+input,
+select,
+textarea {
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    filter 0.15s ease;
+}
+.modal-backdrop {
+  animation: fade-in 0.12s ease-out;
+}
+.modal {
+  animation: pop-in 0.16s ease-out;
+}
+.toast {
+  animation: slide-in 0.2s ease-out;
+}
+.float-panel,
+.rb-menu,
+.ctx-menu {
+  animation: pop-in 0.12s ease-out;
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+}
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
 }

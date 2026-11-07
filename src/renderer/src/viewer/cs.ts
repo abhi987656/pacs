@@ -2,6 +2,7 @@ import {
   cache,
   cornerstoneStreamingImageVolumeLoader,
   Enums,
+  eventTarget,
   init as csInit,
   metaData,
   RenderingEngine,
@@ -23,18 +24,27 @@ const {
   StackScrollTool,
   LengthTool,
   AngleTool,
+  CobbAngleTool,
   EllipticalROITool,
   RectangleROITool,
+  PlanarFreehandROITool,
   ProbeTool,
   ArrowAnnotateTool,
+  LabelTool,
   BidirectionalTool,
   EraserTool,
   MagnifyTool,
   CrosshairsTool,
+  ReferenceLinesTool,
   ToolGroupManager,
   Enums: ToolEnums
 } = csTools
 
+/**
+ * Viewer tools. WindowLevel / Zoom / Pan are "drag modes" handled by our own mouse code
+ * (so they can be switched mid-drag with a right click, like Synapse); everything else is
+ * a Cornerstone tool bound to the left button while active.
+ */
 export type ToolName =
   | 'WindowLevel'
   | 'Pan'
@@ -42,14 +52,21 @@ export type ToolName =
   | 'StackScroll'
   | 'Length'
   | 'Angle'
+  | 'CobbAngle'
   | 'EllipticalROI'
   | 'RectangleROI'
+  | 'FreehandROI'
   | 'Probe'
   | 'ArrowAnnotate'
+  | 'Label'
   | 'Bidirectional'
   | 'Eraser'
   | 'Magnify'
   | 'Crosshairs'
+
+export type DragMode = 'WindowLevel' | 'Zoom' | 'Pan'
+export const DRAG_MODES: DragMode[] = ['WindowLevel', 'Zoom', 'Pan']
+export const isDragMode = (t: ToolName): t is DragMode => (DRAG_MODES as string[]).includes(t)
 
 const TOOL_CLASS: Record<ToolName, { toolName: string }> = {
   WindowLevel: WindowLevelTool,
@@ -58,15 +75,40 @@ const TOOL_CLASS: Record<ToolName, { toolName: string }> = {
   StackScroll: StackScrollTool,
   Length: LengthTool,
   Angle: AngleTool,
+  CobbAngle: CobbAngleTool,
   EllipticalROI: EllipticalROITool,
   RectangleROI: RectangleROITool,
+  FreehandROI: PlanarFreehandROITool,
   Probe: ProbeTool,
   ArrowAnnotate: ArrowAnnotateTool,
+  Label: LabelTool,
   Bidirectional: BidirectionalTool,
   Eraser: EraserTool,
   Magnify: MagnifyTool,
   Crosshairs: CrosshairsTool
 }
+
+export const TOOL_LABEL: Record<ToolName, string> = {
+  WindowLevel: 'Window level',
+  Pan: 'Pan',
+  Zoom: 'Zoom',
+  StackScroll: 'Scroll',
+  Length: 'Ruler',
+  Angle: 'Angle',
+  CobbAngle: 'Cobb angle',
+  EllipticalROI: 'Elliptical ROI',
+  RectangleROI: 'Rectangular ROI',
+  FreehandROI: 'Freehand ROI',
+  Probe: 'Density value',
+  ArrowAnnotate: 'Arrow',
+  Label: 'Text',
+  Bidirectional: 'Bidirectional',
+  Eraser: 'Eraser',
+  Magnify: 'Magnifying glass',
+  Crosshairs: 'Crosshairs'
+}
+
+const MPR_TOOLS: ToolName[] = ['WindowLevel', 'Pan', 'Zoom', 'StackScroll', 'Length', 'Angle', 'EllipticalROI', 'Probe', 'Crosshairs']
 
 export const toolNameOf = (t: ToolName): string => TOOL_CLASS[t].toolName
 
@@ -90,6 +132,8 @@ export function initCornerstone(): Promise<void> {
   return initPromise
 }
 
+const askText = (done: (text: string) => void) => void textPrompt('Annotation text').then((v) => done(v ?? ''))
+
 async function doInit(): Promise<void> {
   csInit()
   dicomLoaderInit({
@@ -106,64 +150,97 @@ async function doInit(): Promise<void> {
   cache.setMaxCacheSize(1.5 * 1024 * 1024 * 1024)
 
   for (const t of Object.values(TOOL_CLASS)) csTools.addTool(t as never)
+  csTools.addTool(ReferenceLinesTool)
 
   // Stack tool group: used by all normal viewports.
   const stack = ToolGroupManager.createToolGroup(STACK_TOOLGROUP)!
   for (const t of Object.keys(TOOL_CLASS) as ToolName[]) {
     if (t === 'Crosshairs') continue
-    if (t === 'ArrowAnnotate') {
+    if (t === 'ArrowAnnotate' || t === 'Label') {
       stack.addTool(toolNameOf(t), {
-        getTextCallback: (done: (text: string) => void) => {
-          void textPrompt('Annotation text').then((v) => done(v ?? ''))
-        },
-        changeTextCallback: (_data: unknown, _evt: unknown, done: (text: string) => void) => {
-          void textPrompt('Annotation text').then((v) => done(v ?? ''))
-        }
+        getTextCallback: askText,
+        changeTextCallback: (_data: unknown, _evt: unknown, done: (text: string) => void) => askText(done)
       })
     } else {
       stack.addTool(toolNameOf(t))
     }
   }
-  setDefaultBindings(stack, 'WindowLevel')
+  stack.addTool(ReferenceLinesTool.toolName, { sourceViewportId: '' })
+  setPrimaryTool('WindowLevel', false)
 
   // MPR tool group: crosshairs + navigation.
   const mpr = ToolGroupManager.createToolGroup(MPR_TOOLGROUP)!
-  for (const t of ['WindowLevel', 'Pan', 'Zoom', 'StackScroll', 'Length', 'Angle', 'EllipticalROI', 'Probe', 'Crosshairs'] as ToolName[]) {
-    mpr.addTool(toolNameOf(t))
-  }
-  setDefaultBindings(mpr, 'WindowLevel')
+  for (const t of MPR_TOOLS) mpr.addTool(toolNameOf(t))
+  setPrimaryTool('WindowLevel', true)
 
   engine = new RenderingEngine(RENDERING_ENGINE_ID)
 }
 
-type ToolGroup = NonNullable<ReturnType<typeof ToolGroupManager.getToolGroup>>
-
-/** Primary button = chosen tool; middle = pan; right = zoom; wheel = scroll. */
-export function setDefaultBindings(group: ToolGroup, primary: ToolName): void {
-  const { MouseBindings } = ToolEnums
-  const names = group.getToolInstances ? Object.keys(group.getToolInstances()) : []
-  for (const n of names) {
-    // Annotation tools stay "passive" so existing measurements remain editable.
-    group.setToolPassive(n)
-  }
-  group.setToolActive(toolNameOf(primary), { bindings: [{ mouseButton: MouseBindings.Primary }] })
-  if (primary !== 'Pan') group.setToolActive(toolNameOf('Pan'), { bindings: [{ mouseButton: MouseBindings.Auxiliary }] })
-  if (primary !== 'Zoom') group.setToolActive(toolNameOf('Zoom'), { bindings: [{ mouseButton: MouseBindings.Secondary }] })
-  group.setToolActive(toolNameOf('StackScroll'), { bindings: [{ mouseButton: MouseBindings.Wheel }] })
-  if (primary === 'StackScroll') {
-    group.setToolActive(toolNameOf('StackScroll'), {
-      bindings: [{ mouseButton: MouseBindings.Primary }, { mouseButton: MouseBindings.Wheel }]
-    })
-  }
-}
-
+/**
+ * Left button = the chosen annotation tool (drag modes are handled by our mouse code),
+ * middle drag and wheel = scroll through images (Synapse style). Right button opens the menu.
+ */
 export function setPrimaryTool(primary: ToolName, mprMode: boolean): void {
   const g = ToolGroupManager.getToolGroup(mprMode ? MPR_TOOLGROUP : STACK_TOOLGROUP)
   if (!g) return
-  if (mprMode && !['WindowLevel', 'Pan', 'Zoom', 'StackScroll', 'Length', 'Angle', 'EllipticalROI', 'Probe', 'Crosshairs'].includes(primary)) {
-    primary = 'WindowLevel'
+  const { MouseBindings } = ToolEnums
+  const names = Object.keys(g.getToolInstances())
+  for (const n of names) {
+    if (n === ReferenceLinesTool.toolName) continue // enabled/disabled separately
+    // "Passive" keeps existing measurements selectable and editable.
+    g.setToolPassive(n)
   }
-  setDefaultBindings(g, primary)
+  if (mprMode && !MPR_TOOLS.includes(primary)) primary = 'WindowLevel'
+  if (!isDragMode(primary)) g.setToolActive(toolNameOf(primary), { bindings: [{ mouseButton: MouseBindings.Primary }] })
+  g.setToolActive(toolNameOf('StackScroll'), {
+    bindings: [{ mouseButton: MouseBindings.Wheel }, { mouseButton: MouseBindings.Auxiliary }]
+  })
+}
+
+/** Reference lines (the slice position of the active image drawn on other images, e.g. the scout). */
+export function setReferenceLines(on: boolean, sourceViewportId: string): void {
+  const g = ToolGroupManager.getToolGroup(STACK_TOOLGROUP)
+  if (!g) return
+  if (on && sourceViewportId) {
+    g.setToolConfiguration(ReferenceLinesTool.toolName, { sourceViewportId })
+    g.setToolEnabled(ReferenceLinesTool.toolName)
+  } else {
+    g.setToolDisabled(ReferenceLinesTool.toolName)
+  }
+}
+
+// ------------------------------------------------------------------ linked W/L + zoom/pan ("I" key)
+
+let voiSync: ReturnType<typeof csTools.synchronizers.createVOISynchronizer> | null = null
+let zoomPanSync: ReturnType<typeof csTools.synchronizers.createZoomPanSynchronizer> | null = null
+
+export function setPresentationLink(on: boolean, viewportIds: string[]): void {
+  voiSync?.destroy()
+  zoomPanSync?.destroy()
+  voiSync = null
+  zoomPanSync = null
+  if (!on || viewportIds.length < 2) return
+  voiSync = csTools.synchronizers.createVOISynchronizer('pacs-voi-link', { syncInvertState: true, syncColormap: false })
+  zoomPanSync = csTools.synchronizers.createZoomPanSynchronizer('pacs-zoompan-link')
+  for (const viewportId of viewportIds) {
+    voiSync.add({ renderingEngineId: RENDERING_ENGINE_ID, viewportId })
+    zoomPanSync.add({ renderingEngineId: RENDERING_ENGINE_ID, viewportId })
+  }
+}
+
+/** Called when a measurement is finished (used to drop back to window/level after one use). */
+export function onAnnotationCompleted(cb: () => void): () => void {
+  const handler = () => cb()
+  eventTarget.addEventListener(csTools.Enums.Events.ANNOTATION_COMPLETED, handler)
+  return () => eventTarget.removeEventListener(csTools.Enums.Events.ANNOTATION_COMPLETED, handler)
+}
+
+export function annotationNear(element: HTMLDivElement, x: number, y: number): boolean {
+  try {
+    return !!csTools.utilities.getAnnotationNearPoint(element, [x, y], 8)
+  } catch {
+    return false
+  }
 }
 
 // ------------------------------------------------------------------ window/level presets
@@ -175,22 +252,26 @@ export interface WlPreset {
   wc: number
 }
 
+// Same values as the Fujifilm Synapse defaults; keys 1-9 / number pad.
 export const CT_PRESETS: WlPreset[] = [
-  { key: '1', name: 'Abdomen / soft tissue', ww: 400, wc: 40 },
-  { key: '2', name: 'Lung', ww: 1500, wc: -600 },
-  { key: '3', name: 'Bone', ww: 1800, wc: 400 },
-  { key: '4', name: 'Brain', ww: 80, wc: 40 },
-  { key: '5', name: 'Mediastinum', ww: 350, wc: 50 },
-  { key: '6', name: 'Liver', ww: 150, wc: 30 },
-  { key: '7', name: 'Subdural', ww: 200, wc: 75 },
-  { key: '8', name: 'Stroke', ww: 40, wc: 40 },
-  { key: '9', name: 'Angio (CTA)', ww: 600, wc: 150 }
+  { key: '1', name: 'Body Soft Tissue', ww: 350, wc: 50 },
+  { key: '2', name: 'Body Lung', ww: 1600, wc: -500 },
+  { key: '3', name: 'Body Bone', ww: 1500, wc: 300 },
+  { key: '4', name: 'Body Liver', ww: 200, wc: 60 },
+  { key: '5', name: 'Head Mid Brain', ww: 80, wc: 40 },
+  { key: '6', name: 'Head Post Fossa', ww: 200, wc: 40 },
+  { key: '7', name: 'Head Blood', ww: 700, wc: 80 },
+  { key: '8', name: 'Head Bone', ww: 4000, wc: 600 },
+  { key: '9', name: 'CTA MIP', ww: 700, wc: 250 },
+  { key: '', name: 'Head IAC', ww: 3200, wc: 250 },
+  { key: '', name: 'Stroke', ww: 40, wc: 40 },
+  { key: '', name: 'Subdural', ww: 200, wc: 75 }
 ]
 
 // Uses the DICOM window convention (same as the scanner/other PACS), so W 400 C 40 shows as 400/40.
 export function applyVoi(vp: Types.IViewport, ww: number, wc: number): void {
   const v = vp as Types.IStackViewport
-  v.setProperties({ voiRange: csUtilities.windowLevel.toLowHighRange(ww, wc) })
+  v.setProperties({ voiRange: csUtilities.windowLevel.toLowHighRange(Math.max(1, ww), wc) })
   v.render()
 }
 
@@ -200,6 +281,61 @@ export function getVoi(vp: Types.IViewport): { ww: number; wc: number } | null {
   if (!r) return null
   const { windowWidth, windowCenter } = csUtilities.windowLevel.toWindowLevel(r.lower, r.upper)
   return { ww: windowWidth, wc: windowCenter }
+}
+
+/** How many HU (or pixel values) one pixel of mouse movement changes the window by. */
+export function voiMultiplier(vp: Types.IViewport): number {
+  try {
+    if (vp.type === Enums.ViewportType.STACK) {
+      const img = (vp as Types.IStackViewport).getCornerstoneImage()
+      const range = (img?.maxPixelValue ?? 0) - (img?.minPixelValue ?? 0)
+      if (range > 0) return Math.max(0.5, range / 1024)
+    }
+  } catch {
+    /* fall through */
+  }
+  return 4
+}
+
+// ------------------------------------------------------------------ camera helpers
+
+export function panBy(vp: Types.IViewport, from: [number, number], to: [number, number]): void {
+  const a = vp.canvasToWorld(from)
+  const b = vp.canvasToWorld(to)
+  const d: Types.Point3 = [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+  const cam = vp.getCamera()
+  const fp = cam.focalPoint as Types.Point3
+  const pos = cam.position as Types.Point3
+  vp.setCamera({
+    focalPoint: [fp[0] + d[0], fp[1] + d[1], fp[2] + d[2]],
+    position: [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]]
+  })
+  vp.render()
+}
+
+export function zoomBy(vp: Types.IViewport, factor: number): void {
+  const z = vp.getZoom()
+  vp.setZoom(Math.min(40, Math.max(0.05, z * factor)))
+  vp.render()
+}
+
+/** Zoom so one image pixel = one screen pixel ("-" key in Synapse). */
+export function zoomActualSize(vp: Types.IViewport): void {
+  if (vp.type !== Enums.ViewportType.STACK) return
+  const img = (vp as Types.IStackViewport).getCornerstoneImage()
+  if (!img) return
+  const el = vp.element as HTMLDivElement
+  const fit = Math.min(el.clientWidth / img.columns, el.clientHeight / img.rows)
+  if (fit > 0) {
+    vp.resetCamera()
+    vp.setZoom(1 / fit)
+    vp.render()
+  }
+}
+
+export function zoomToFit(vp: Types.IViewport): void {
+  vp.resetCamera()
+  vp.render()
 }
 
 // ------------------------------------------------------------------ geometry helpers

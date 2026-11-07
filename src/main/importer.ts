@@ -152,7 +152,15 @@ export class Importer {
             const year = (h.studyDate || '0000').slice(0, 4)
             const folder = `${year}/${h.studyDate || 'nodate'}_${safeName(h.patientId || 'noid', 16)}_${short(h.studyUid, 10)}`
             studyFields.folder = folder
-            study = { id: this.db.insertStudy(studyFields), folder }
+            // A case typed in by hand (reported before the CD arrived) with the same accession/PG No
+            // gets these images, so the report and the images end up together.
+            const manualId = this.db.findManualStudyFor(h.accession, h.patientId)
+            if (manualId != null) {
+              this.db.adoptManualStudy(manualId, studyFields)
+              study = { id: manualId, folder }
+            } else {
+              study = { id: this.db.insertStudy(studyFields), folder }
+            }
           }
           studyCache.set(h.studyUid, study)
         }

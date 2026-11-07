@@ -28,6 +28,7 @@ import { Modal, Panel, useEvent, useUi } from '../common/ui'
 import { buildExtensions, fillPlaceholders, findNext, insertMacroText, replaceAll, replaceCurrent } from './editor'
 import { Ribbon } from './Ribbon'
 import { DictationControl } from './DictationControl'
+import { CaseDialog } from './CaseDialog'
 
 const api = window.api
 const MODALITY_OPTIONS = ['CT', 'MR', 'CR', 'DX', 'US', 'MG', 'PT', 'NM', 'XA', 'RF', 'OT']
@@ -89,6 +90,7 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
   const [versionPreview, setVersionPreview] = useState<ReportVersion | null>(null)
   const [clinical, setClinical] = useState('')
   const [autosavedAt, setAutosavedAt] = useState<string | null>(null)
+  const [editDetails, setEditDetails] = useState(false)
 
   const macrosRef = useRef<Macro[]>([])
   macrosRef.current = macros
@@ -248,6 +250,16 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  // Details changed elsewhere (viewer notes, edit dialog, images attached to a new case).
+  useEvent(api.onStudiesChanged, () => {
+    void api.getStudy(studyId).then((d) => {
+      if (!d) return
+      setStudy(d.study)
+      if (!(document.activeElement instanceof HTMLTextAreaElement && document.activeElement.classList.contains('clinical')))
+        setClinical(d.study.clinicalHistory)
+    })
+  })
+
   // Key images sent from the viewer.
   useEvent(api.onKeyImage, (img: { dataUrl: string; caption: string }) => {
     if (readOnly) {
@@ -386,6 +398,10 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
     props.onSettingsChange(s)
   }
 
+  const openImages = async (id: number) => {
+    if (!(await api.openViewer(id))) ui.toast('No images for this case yet. Import the CD – images with the same PG No attach automatically.', 'info')
+  }
+
   const exportPdf = async () => {
     if (dirty && !readOnly) await save(draftStatus(), { silent: true })
     const file = await api.exportReportPdf(studyId)
@@ -484,8 +500,11 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
               <span>Imported:</span> {formatIsoDateTime(study.importedAt)}
             </div>
             <div className="kv-s">
-              <span>Modality:</span> {study.modalities.split('\\').join(', ')} · {study.institution || 'Unknown site'}
+              <span>Modality:</span> {study.modalities.split('\\').join(', ')} · {study.institution || (study.manual ? 'No images' : 'Unknown site')}
             </div>
+            <button className="link-btn" onClick={() => setEditDetails(true)}>
+              Edit patient / study details…
+            </button>
           </SidePanel>
           <SidePanel title="Clinical Details">
             <textarea
@@ -529,7 +548,7 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
                     <button
                       className="icon-btn"
                       title="Open images of this study"
-                      onClick={() => void api.openViewer(p.id)}
+                      onClick={() => void openImages(p.id)}
                     >
                       <ImageIcon size={15} />
                     </button>
@@ -753,7 +772,7 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
             >
               »
             </button>
-            <button className="btn btn-blue" onClick={() => void api.openViewer(studyId)} title="Open images in the viewer">
+            <button className="btn btn-blue" onClick={() => void openImages(studyId)} title="Open images in the viewer">
               <ImageIcon size={15} /> Images
             </button>
             <button className="icon-btn big" title="Version history" onClick={() => void openHistory()}>
@@ -771,6 +790,23 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
           </footer>
         </main>
       </div>
+
+      {editDetails && (
+        <CaseDialog
+          study={study}
+          procedures={[]}
+          onClose={() => setEditDetails(false)}
+          onSaved={async () => {
+            setEditDetails(false)
+            const d = await api.getStudy(studyId)
+            if (d) {
+              setStudy(d.study)
+              setPriors(await api.getPriors(studyId))
+            }
+            ui.toast('Details updated', 'success')
+          }}
+        />
+      )}
 
       {priorView && (
         <Modal

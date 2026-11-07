@@ -14,6 +14,9 @@ const api: PacsApi = {
   getStudy: (id) => ipcRenderer.invoke('studies:get', id),
   getPriors: (id) => ipcRenderer.invoke('studies:priors', id),
   updateStudy: (id, patch) => ipcRenderer.invoke('studies:update', id, patch),
+  createManualStudy: (input) => ipcRenderer.invoke('studies:createManual', input),
+  updateStudyDetails: (id, patch) => ipcRenderer.invoke('studies:updateDetails', id, patch),
+  findPatient: (patientId) => ipcRenderer.invoke('patients:find', patientId),
   deleteStudy: (id) => ipcRenderer.invoke('studies:delete', id),
   showStudyInFolder: (id) => ipcRenderer.invoke('studies:showInFolder', id),
   getSeriesImages: (id) => ipcRenderer.invoke('series:images', id),
@@ -32,6 +35,7 @@ const api: PacsApi = {
     return off
   },
   sendKeyImage: (img) => ipcRenderer.invoke('keyimage:send', img),
+  saveImage: (dataUrl, name) => ipcRenderer.invoke('image:save', dataUrl, name),
   onKeyImage: (cb) => on('keyimage', cb),
   onStudiesChanged: (cb) => on('studies:changed', cb),
   openReportFor: (id) => ipcRenderer.invoke('report:openFor', id),

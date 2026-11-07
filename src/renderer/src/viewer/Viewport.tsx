@@ -4,7 +4,24 @@ import type { Types } from '@cornerstonejs/core'
 import * as csTools from '@cornerstonejs/tools'
 import type { SeriesImages, StudyRow } from '@shared/types'
 import { formatAge, formatDicomDate, formatDicomDateTime, formatSex } from '@shared/format'
-import { getEngine, getNatural, getVoi, MPR_TOOLGROUP, num, orientationMarkers, RENDERING_ENGINE_ID, STACK_TOOLGROUP, str } from './cs'
+import type { MouseEvent as ReactMouseEvent } from 'react'
+import {
+  annotationNear,
+  applyVoi,
+  getEngine,
+  getNatural,
+  getVoi,
+  MPR_TOOLGROUP,
+  num,
+  orientationMarkers,
+  panBy,
+  RENDERING_ENGINE_ID,
+  STACK_TOOLGROUP,
+  str,
+  voiMultiplier,
+  zoomBy
+} from './cs'
+import type { DragMode } from './cs'
 
 export type SlotKind = 'stack' | 'axial' | 'sagittal' | 'coronal'
 
@@ -27,6 +44,7 @@ interface OverlayState {
 
 interface Props {
   slot: SlotInfo
+  index: number
   active: boolean
   hidden: boolean
   study: StudyRow | null
@@ -38,6 +56,14 @@ interface Props {
   onDoubleClick: () => void
   onDropSeries: (seriesId: number, studyId: number) => void
   onImageChange: (slotId: string, oldIndex: number, newIndex: number) => void
+  /** Left-drag mode (W/L, zoom, pan); null while a measurement tool is active. */
+  dragMode: DragMode | null
+  onCycleDragMode: () => DragMode
+  onContextMenu: (x: number, y: number) => void
+  onSeriesDrag: (fromIndex: number, toIndex: number, copy: boolean) => void
+  onMiddleDoubleClick: () => void
+  showAnnotations: boolean
+  scrollLinked: boolean
 }
 
 const ORIENT: Record<Exclude<SlotKind, 'stack'>, Enums.OrientationAxis> = {
@@ -54,7 +80,113 @@ export function Viewport(p: Props) {
   const raf = useRef(0)
   const onImageChange = useRef(p.onImageChange)
   onImageChange.current = p.onImageChange
+  const propsRef = useRef(p)
+  propsRef.current = p
+  const drag = useRef<{ mode: DragMode; x: number; y: number; moved: boolean } | null>(null)
+  const suppressMenu = useRef(false)
+  const lastMiddle = useRef(0)
   const { id, kind } = p.slot
+
+  // ---------------------------------------------------------------- Synapse-style mouse
+  // Left drag = window/level (or zoom/pan); while holding the left button, each right click
+  // switches W/L -> Zoom -> Pan. Alt+drag = W/L, Alt+Ctrl = zoom, Alt+Shift = pan.
+  // Shift+drag moves the series to another tile, Ctrl+drag copies it. Right click = menu.
+  const startManipulation = (mode: DragMode, cx: number, cy: number) => {
+    const vp = getEngine().getViewport(id)
+    const el = elRef.current
+    if (!vp || !el) return
+    const rect = el.getBoundingClientRect()
+    const voi = getVoi(vp)
+    let ww = voi?.ww ?? 400
+    let wc = voi?.wc ?? 40
+    const mult = voiMultiplier(vp)
+    drag.current = { mode, x: cx, y: cy, moved: false }
+    const move = (ev: MouseEvent) => {
+      const d = drag.current
+      if (!d) return
+      const dx = ev.clientX - d.x
+      const dy = ev.clientY - d.y
+      if (!d.moved && Math.abs(dx) + Math.abs(dy) < 2) return
+      d.moved = true
+      if (d.mode === 'WindowLevel') {
+        const now = getVoi(vp)
+        if (now) {
+          ww = now.ww
+          wc = now.wc
+        }
+        ww = Math.max(1, ww + dx * mult)
+        wc = wc + dy * mult
+        applyVoi(vp, ww, wc)
+      } else if (d.mode === 'Zoom') {
+        zoomBy(vp, Math.exp(-dy * 0.01))
+      } else {
+        panBy(vp, [d.x - rect.left, d.y - rect.top], [ev.clientX - rect.left, ev.clientY - rect.top])
+      }
+      d.x = ev.clientX
+      d.y = ev.clientY
+    }
+    const up = (ev: MouseEvent) => {
+      if (ev.button !== 0) return
+      drag.current = null
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up, true)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up, true)
+  }
+
+  const startSeriesDrag = (copy: boolean) => {
+    document.body.classList.add(copy ? 'dragging-copy' : 'dragging-move')
+    const up = (ev: MouseEvent) => {
+      document.body.classList.remove('dragging-copy', 'dragging-move')
+      window.removeEventListener('mouseup', up, true)
+      const target = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-slot-index]') as HTMLElement | null
+      const to = target ? Number(target.dataset.slotIndex) : -1
+      if (to >= 0 && to !== propsRef.current.index) propsRef.current.onSeriesDrag(propsRef.current.index, to, copy)
+    }
+    window.addEventListener('mouseup', up, true)
+  }
+
+  const onMouseDownCapture = (e: ReactMouseEvent) => {
+    p.onActivate()
+    const el = elRef.current
+    if (!el) return
+    if (e.button === 1) {
+      const t = Date.now()
+      if (t - lastMiddle.current < 350) {
+        e.preventDefault()
+        p.onMiddleDoubleClick()
+      }
+      lastMiddle.current = t
+      return // middle drag = scroll (handled by Cornerstone)
+    }
+    if (e.button === 2) {
+      if (drag.current) {
+        drag.current.mode = p.onCycleDragMode()
+        suppressMenu.current = true
+        e.preventDefault()
+        e.stopPropagation()
+      }
+      return
+    }
+    if (e.button !== 0) return
+    if ((e.shiftKey || e.ctrlKey) && !e.altKey) {
+      if (kind === 'stack' && p.slot.seriesId != null) {
+        e.preventDefault()
+        e.stopPropagation()
+        startSeriesDrag(e.ctrlKey)
+      }
+      return
+    }
+    const rect = el.getBoundingClientRect()
+    let mode: DragMode | null = null
+    if (e.altKey) mode = e.ctrlKey ? 'Zoom' : e.shiftKey ? 'Pan' : 'WindowLevel'
+    else if (p.dragMode && !annotationNear(el, e.clientX - rect.left, e.clientY - rect.top)) mode = p.dragMode
+    if (!mode) return // a measurement tool is active, or an existing measurement is being edited
+    e.preventDefault()
+    e.stopPropagation()
+    startManipulation(mode, e.clientX, e.clientY)
+  }
 
   // Enable / disable the Cornerstone element for this slot.
   useEffect(() => {
@@ -181,9 +313,18 @@ export function Viewport(p: Props) {
 
   return (
     <div
-      className={`v-slot ${p.active ? 'active' : ''} ${dropping ? 'drop' : ''} ${p.hidden ? 'hidden' : ''}`}
-      onMouseDownCapture={p.onActivate}
-      onDoubleClick={p.onDoubleClick}
+      className={`v-slot ${p.active ? 'active' : ''} ${dropping ? 'drop' : ''} ${p.hidden ? 'hidden' : ''} ${p.showAnnotations ? '' : 'hide-annotations'}`}
+      data-slot-index={p.index}
+      onMouseDownCapture={onMouseDownCapture}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        if (suppressMenu.current) {
+          suppressMenu.current = false
+          return
+        }
+        p.onContextMenu(e.clientX, e.clientY)
+      }}
+      onDoubleClick={(e) => e.button === 0 && !e.altKey && p.onDoubleClick()}
       onDragOver={(e) => {
         if (kind !== 'stack') return
         e.preventDefault()
@@ -203,6 +344,7 @@ export function Viewport(p: Props) {
       {!hasImages && <div className="v-empty">Drag a series here, or click a thumbnail above</div>}
       {p.loadingText && <div className="v-loading">{p.loadingText}</div>}
       {kind !== 'stack' && <div className="mpr-label">{kind.toUpperCase()}</div>}
+      {p.scrollLinked && hasImages && <div className="link-badge" title="Linked scrolling (S)">LINK</div>}
       {p.showOverlay && hasImages && s && (
         <>
           <div className="ov tl">

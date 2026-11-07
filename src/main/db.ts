@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import type {
   Macro,
+  ManualStudyInput,
   Report,
   ReportSaveInput,
   ReportStatus,
@@ -150,7 +152,8 @@ function mapStudy(r: Row): StudyRow {
     reportStatus: (str(r.report_status) || 'NEW') as ReportStatus,
     reportUpdatedAt: r.report_updated_at == null ? null : str(r.report_updated_at),
     visitType: str(r.visit_type),
-    clinicalHistory: str(r.clinical_history)
+    clinicalHistory: str(r.clinical_history),
+    manual: num(r.manual) === 1
   }
 }
 
@@ -258,6 +261,11 @@ export class Db {
     if (v < 1) {
       this.db.exec(SCHEMA_V1)
       this.db.exec('PRAGMA user_version = 1')
+    }
+    if (v < 2) {
+      // Cases created by hand (reporting without images).
+      this.db.exec('ALTER TABLE studies ADD COLUMN manual INTEGER NOT NULL DEFAULT 0')
+      this.db.exec('PRAGMA user_version = 2')
     }
   }
 
@@ -471,6 +479,78 @@ export class Db {
     if (patch.clinicalHistory !== undefined)
       this.run('UPDATE studies SET clinical_history = ? WHERE id = ?', patch.clinicalHistory, id)
     if (patch.referring !== undefined) this.run('UPDATE studies SET referring = ? WHERE id = ?', patch.referring, id)
+  }
+
+  /** Creates a case without images so it can be reported straight away. */
+  createManualStudy(m: ManualStudyInput): number {
+    return this.run(
+      `INSERT INTO studies (study_uid, patient_id, patient_name, patient_name_raw, birth_date, sex, age, study_date,
+        study_time, description, accession, referring, modalities, imported_at, visit_type, clinical_history, manual)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
+      `manual-${randomUUID()}`, m.patientId, m.patientName, m.patientName, m.birthDate, m.sex, m.age, m.studyDate,
+      m.studyTime, m.description, m.accession, m.referring, m.modality, now(), m.visitType, m.clinicalHistory
+    )
+  }
+
+  /** Corrects patient / study details (stored in this app only – the DICOM files are not changed). */
+  updateStudyDetails(id: number, m: Partial<ManualStudyInput>): void {
+    const cols: [keyof ManualStudyInput, string][] = [
+      ['patientName', 'patient_name'],
+      ['patientId', 'patient_id'],
+      ['accession', 'accession'],
+      ['sex', 'sex'],
+      ['age', 'age'],
+      ['birthDate', 'birth_date'],
+      ['description', 'description'],
+      ['modality', 'modalities'],
+      ['studyDate', 'study_date'],
+      ['studyTime', 'study_time'],
+      ['referring', 'referring'],
+      ['visitType', 'visit_type'],
+      ['clinicalHistory', 'clinical_history']
+    ]
+    for (const [key, col] of cols) {
+      const v = m[key]
+      if (typeof v === 'string') this.run(`UPDATE studies SET ${col} = ? WHERE id = ?`, v, id)
+    }
+  }
+
+  /** A hand-made case (no images yet) with this accession number, for attaching imported images. */
+  findManualStudyFor(accession: string, patientId: string): number | null {
+    if (!accession.trim()) return null
+    const r = this.get(
+      `SELECT s.id FROM studies s WHERE s.manual = 1 AND UPPER(TRIM(s.accession)) = UPPER(TRIM(?))
+         AND (s.patient_id = '' OR ? = '' OR UPPER(TRIM(s.patient_id)) = UPPER(TRIM(?)))
+         AND NOT EXISTS (SELECT 1 FROM series se WHERE se.study_id = s.id)
+       ORDER BY s.id DESC LIMIT 1`,
+      accession, patientId, patientId
+    )
+    return r ? num(r.id) : null
+  }
+
+  /** Turns a hand-made case into the imported study (keeps what the user typed). */
+  adoptManualStudy(id: number, s: StudyInsert): void {
+    this.run('UPDATE studies SET study_uid = ?, folder = ?, manual = 0 WHERE id = ?', s.studyUid, s.folder, id)
+    this.fillStudyBlanks(id, s)
+    this.run(
+      `UPDATE studies SET
+        study_date = CASE WHEN ? != '' THEN ? ELSE study_date END,
+        study_time = CASE WHEN ? != '' THEN ? ELSE study_time END,
+        institution = CASE WHEN institution = '' THEN ? ELSE institution END
+       WHERE id = ?`,
+      s.studyDate, s.studyDate, s.studyTime, s.studyTime, s.institution, id
+    )
+  }
+
+  /** Latest demographics for a patient ID (used to pre-fill the New Case form). */
+  findPatient(patientId: string): { patientName: string; sex: string; age: string; birthDate: string } | null {
+    if (!patientId.trim()) return null
+    const r = this.get(
+      `SELECT patient_name, sex, age, birth_date, study_date FROM studies WHERE UPPER(TRIM(patient_id)) = UPPER(TRIM(?))
+       ORDER BY study_date DESC, id DESC LIMIT 1`,
+      patientId
+    )
+    return r ? { patientName: str(r.patient_name), sex: str(r.sex), age: str(r.age), birthDate: str(r.birth_date) } : null
   }
 
   getStudyFolder(id: number): string | null {

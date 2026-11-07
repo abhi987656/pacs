@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DragEvent } from 'react'
-import { Disc, Files, FileText, FolderOpen, Image as ImageIcon, RefreshCw, Search, Trash, X } from 'lucide-react'
+import { Disc, FilePlus, Files, FileText, FolderOpen, Image as ImageIcon, RefreshCw, Search, Trash, X } from 'lucide-react'
 import type { ImportProgress, Settings, StudyFilter, StudyRow } from '@shared/types'
 import {
   dicomDateFromDate,
@@ -12,6 +12,7 @@ import {
   STATUS_LABEL
 } from '@shared/format'
 import { useEvent, useUi } from '../common/ui'
+import { CaseDialog } from './CaseDialog'
 
 const api = window.api
 
@@ -53,6 +54,8 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
   const [progress, setProgress] = useState<ImportProgress | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [newCase, setNewCase] = useState(false)
+  const [procedures, setProcedures] = useState<string[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -142,6 +145,18 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
         <div className="brand">Personal PACS</div>
         <div className="topbar-title">Worklist</div>
         <div className="topbar-actions">
+          <button
+            className="btn btn-outline"
+            title="Start a report for a patient without images (enter name, CR No, PG No)"
+            onClick={() => {
+              void Promise.all([api.listStudies({ limit: 500 }), api.listTemplates()]).then(([st, tp]) =>
+                setProcedures([...new Set([...st.map((x) => x.description).filter(Boolean), ...tp.map((t) => t.name.toUpperCase())])].sort())
+              )
+              setNewCase(true)
+            }}
+          >
+            <FilePlus size={16} /> New Case
+          </button>
           <button className="btn btn-green" onClick={() => void startImport('folder')} disabled={running}>
             <Disc size={16} /> Import CD / Folder
           </button>
@@ -252,7 +267,7 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
                   {formatDicomDate(r.studyDate)} <span className="muted">{formatDicomTime(r.studyTime)}</span>
                 </td>
                 <td>{r.accession}</td>
-                <td className="num">{r.numImages}</td>
+                <td className="num">{r.numImages > 0 ? r.numImages : <span className="no-img">no images</span>}</td>
                 <td>
                   <span className={`badge st-${r.reportStatus}`}>{STATUS_LABEL[r.reportStatus]}</span>
                 </td>
@@ -324,6 +339,16 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
         </div>
       )}
       {dragOver && <div className="drop-hint">Drop DICOM files or folders to import</div>}
+      {newCase && (
+        <CaseDialog
+          procedures={procedures}
+          onClose={() => setNewCase(false)}
+          onSaved={(id) => {
+            setNewCase(false)
+            onOpenReport(id)
+          }}
+        />
+      )}
     </div>
   )
 }

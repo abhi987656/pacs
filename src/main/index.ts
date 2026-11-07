@@ -1,9 +1,18 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import type { EditCommand, ImportResult, KeyImage, ReportSaveInput, Settings, SpeechModelId, StudyFilter } from '@shared/types'
+import type {
+  EditCommand,
+  ImportResult,
+  KeyImage,
+  ManualStudyInput,
+  ReportSaveInput,
+  Settings,
+  SpeechModelId,
+  StudyFilter
+} from '@shared/types'
 import { Db } from './db'
 import { Importer } from './importer'
 import { ensureDataPaths, saveDataDir } from './paths'
@@ -108,6 +117,31 @@ function registerIpc(): void {
     db.updateStudy(asId(id), p)
     broadcast('studies:changed')
   })
+  const cleanManual = (m: Record<string, unknown>, partial: boolean): Partial<ManualStudyInput> => {
+    const keys: (keyof ManualStudyInput)[] = [
+      'patientName', 'patientId', 'accession', 'sex', 'age', 'birthDate', 'description', 'modality',
+      'studyDate', 'studyTime', 'referring', 'visitType', 'clinicalHistory'
+    ]
+    const out: Partial<ManualStudyInput> = {}
+    for (const k of keys) {
+      const v = m?.[k]
+      if (typeof v === 'string') out[k] = v.trim().slice(0, k === 'clinicalHistory' ? 4000 : 200)
+      else if (!partial) out[k] = ''
+    }
+    return out
+  }
+  ipcMain.handle('studies:createManual', (_e, input: Record<string, unknown>) => {
+    const m = cleanManual(input, false) as ManualStudyInput
+    if (!m.patientName) throw new Error('Patient name is required')
+    const id = db.createManualStudy(m)
+    broadcast('studies:changed')
+    return id
+  })
+  ipcMain.handle('studies:updateDetails', (_e, id: unknown, patch: Record<string, unknown>) => {
+    db.updateStudyDetails(asId(id), cleanManual(patch, true))
+    broadcast('studies:changed')
+  })
+  ipcMain.handle('patients:find', (_e, patientId: unknown) => (typeof patientId === 'string' ? db.findPatient(patientId) : null))
   ipcMain.handle('studies:delete', async (_e, id: unknown) => {
     const studyId = asId(id)
     const folder = db.getStudyFolder(studyId)
@@ -153,7 +187,12 @@ function registerIpc(): void {
   ipcMain.handle('import:cancel', () => importer.cancel())
 
   // ---------------- windows / cross-window messages
-  ipcMain.handle('viewer:open', (_e, id: unknown) => openViewer(asId(id)))
+  ipcMain.handle('viewer:open', (_e, id: unknown) => {
+    const study = db.getStudy(asId(id))
+    if (!study || study.numImages === 0) return false // case without images
+    openViewer(study.id)
+    return true
+  })
   ipcMain.on('viewer:ready', (e) => {
     if (viewerWin && e.sender === viewerWin.webContents) {
       viewerReady = true
@@ -203,6 +242,20 @@ function registerIpc(): void {
     mainWin?.webContents.send('dictation:toggle')
   })
   ipcMain.on('dictation:active', (_e, active: unknown) => broadcast('dictation:active', !!active))
+
+  ipcMain.handle('image:save', async (e, dataUrl: unknown, name: unknown) => {
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return null
+    const win = senderWindow(e.sender) ?? undefined
+    const safe = String(name ?? 'image').replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'image'
+    const filePath = await askSavePath(win, {
+      title: 'Save image',
+      defaultPath: join(app.getPath('pictures'), `${safe}.png`),
+      filters: [{ name: 'PNG image', extensions: ['png'] }]
+    })
+    if (!filePath) return null
+    await writeFile(filePath, nativeImage.createFromDataURL(dataUrl).toPNG())
+    return filePath
+  })
 
   ipcMain.handle('window:fullscreen', (e, on: boolean) => {
     senderWindow(e.sender)?.setFullScreen(!!on)
@@ -346,6 +399,8 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
+  // No menu bar: keeps the Alt key free for viewer shortcuts (Alt+C compare, Alt+drag W/L …).
+  Menu.setApplicationMenu(null)
   paths = ensureDataPaths()
   db = new Db(paths.dbPath)
   seedIfEmpty(db)

@@ -25,6 +25,24 @@ export interface StudyRow {
   reportUpdatedAt: string | null
   visitType: string
   clinicalHistory: string
+  manual: boolean // created by hand (reporting without images)
+}
+
+/** Details typed in for a case without images (also used to correct any study's details). */
+export interface ManualStudyInput {
+  patientName: string
+  patientId: string // CR No
+  accession: string // PG No
+  sex: string
+  age: string // DICOM style, e.g. "056Y"
+  birthDate: string // YYYYMMDD or ''
+  description: string
+  modality: string
+  studyDate: string // YYYYMMDD
+  studyTime: string // HHMMSS
+  referring: string
+  visitType: string
+  clinicalHistory: string
 }
 
 export interface SeriesRow {
@@ -255,6 +273,9 @@ export interface PacsApi {
   getStudy(studyId: number): Promise<StudyDetail | null>
   getPriors(studyId: number): Promise<StudyRow[]>
   updateStudy(studyId: number, patch: Partial<Pick<StudyRow, 'visitType' | 'clinicalHistory' | 'referring'>>): Promise<void>
+  createManualStudy(input: ManualStudyInput): Promise<number>
+  updateStudyDetails(studyId: number, patch: Partial<ManualStudyInput>): Promise<void>
+  findPatient(patientId: string): Promise<{ patientName: string; sex: string; age: string; birthDate: string } | null>
   deleteStudy(studyId: number): Promise<void>
   showStudyInFolder(studyId: number): Promise<void>
   getSeriesImages(seriesId: number): Promise<SeriesImages>
@@ -266,9 +287,10 @@ export interface PacsApi {
   getPathForFile(file: File): string
   onImportProgress(cb: (p: ImportProgress) => void): () => void
   // windows / cross-window
-  openViewer(studyId: number): Promise<void>
+  openViewer(studyId: number): Promise<boolean>
   onViewerLoadStudy(cb: (studyId: number) => void): () => void
   sendKeyImage(img: KeyImage): Promise<void>
+  saveImage(dataUrl: string, name: string): Promise<string | null>
   onKeyImage(cb: (img: KeyImage) => void): () => void
   onStudiesChanged(cb: () => void): () => void
   openReportFor(studyId: number): Promise<void>

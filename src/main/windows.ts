@@ -98,7 +98,7 @@ export function createMainWindow(): BrowserWindow {
     minHeight: 640,
     show: false,
     title: 'Personal PACS',
-    backgroundColor: '#1b2631',
+    backgroundColor: '#000000',
     autoHideMenuBar: true,
     ...(st?.bounds && boundsVisible(st.bounds) ? st.bounds : {}),
     webPreferences: {

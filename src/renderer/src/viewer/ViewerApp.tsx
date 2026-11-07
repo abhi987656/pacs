@@ -4,11 +4,10 @@ import { Enums as CoreEnums, setVolumesForViewports, utilities as csUtils } from
 import type { Types } from '@cornerstonejs/core'
 import * as csTools from '@cornerstonejs/tools'
 import {
-  ArrowLeftRight,
   ArrowUpRight,
+  Bookmark,
   Box,
-  Camera,
-  ChevronsUpDown,
+  Captions,
   CircleHelp,
   Columns2,
   Contrast,
@@ -18,37 +17,54 @@ import {
   FileText,
   Hand,
   Info,
+  Lasso,
+  Link,
   Link2,
+  Lock,
+  LockOpen,
   Mic,
   MicOff,
-  Move,
+  PanelTop,
   Pause,
   Play,
   RotateCcw,
-  RotateCw,
   Ruler,
+  ScanLine,
   Search,
-  Square,
+  StickyNote,
   SunMoon,
-  Trash,
   Triangle,
+  Type,
+  X,
   ZoomIn
 } from 'lucide-react'
 import type { SeriesImages, SeriesRow, StudyRow } from '@shared/types'
-import { formatDicomDate, formatDicomTime } from '@shared/format'
+import { formatAge, formatDicomDate, formatDicomDateTime, formatDicomTime, formatSex } from '@shared/format'
 import { Modal, useEvent, useUi } from '../common/ui'
 import {
   applyVoi,
   cache,
   CT_PRESETS,
+  DRAG_MODES,
   getEngine,
+  getNatural,
   initCornerstone,
+  isDragMode,
+  onAnnotationCompleted,
   prefetchSeries,
+  setPresentationLink,
   setPrimaryTool,
+  setReferenceLines,
   setTextPrompt,
-  volumeLoader
+  str,
+  TOOL_LABEL,
+  volumeLoader,
+  zoomActualSize,
+  zoomToFit
 } from './cs'
-import type { ToolName } from './cs'
+import type { DragMode, ToolName } from './cs'
+import { ContextMenu } from './ContextMenu'
+import type { MenuItem } from './ContextMenu'
 import { Viewport } from './Viewport'
 import type { SlotInfo } from './Viewport'
 
@@ -142,6 +158,53 @@ interface MprState {
   prevSlots: SlotInfo[]
 }
 
+// Hot keys (Fujifilm Synapse layout). Measurement tools apply once, then drop back to
+// window/level, unless locked with L (or chosen from the toolbar).
+const HOTKEY_TOOLS: Record<string, ToolName> = {
+  r: 'Length',
+  t: 'Label',
+  a: 'ArrowAnnotate',
+  d: 'Probe',
+  g: 'Angle',
+  f: 'FreehandROI',
+  e: 'EllipticalROI',
+  o: 'Magnify',
+  w: 'WindowLevel',
+  z: 'Zoom',
+  p: 'Pan',
+  x: 'Eraser'
+}
+
+const HELP: [string, string][] = [
+  ['Mouse wheel / middle-drag', 'Scroll through images'],
+  ['Left-drag', 'Window/level (or the selected tool)'],
+  ['Hold left + right click', 'Switch the drag between window/level → zoom → pan'],
+  ['Right click', 'Image tools menu (presets, tools, layouts …)'],
+  ['Alt + drag', 'Window/level (left-right = width, up-down = level)'],
+  ['Alt + Ctrl + drag / Alt + Shift + drag', 'Zoom / pan'],
+  ['Shift + drag / Ctrl + drag', 'Move / copy a series to another tile'],
+  ['Double-click middle button', 'Link window/level + zoom between tiles (same as I)'],
+  ['R  T  A  D', 'Ruler, text, arrow, density value (HU)'],
+  ['G  F  E  O', 'Angle, freehand ROI, elliptical ROI, magnifying glass'],
+  ['L / Esc', 'Lock the current tool / back to window/level'],
+  ['B', 'Bookmark – send the image to the report (key image)'],
+  ['S  K  C  J', 'Linked scrolling on/off, add/remove tile, remove all, auto-link'],
+  ['I', 'Link window/level + zoom/pan between tiles'],
+  ['Q / U', 'Lock / unlock reference lines'],
+  ['= / -', 'Zoom to fit / zoom 1:1'],
+  ['N / M', 'Cine / MPR (axial, sagittal, coronal)'],
+  ['1 – 9, number pad, 0', 'Window presets, 0 = original'],
+  ['Home / End, PgUp / PgDn, arrows', 'First / last image, ±10 images, ±1 image'],
+  ['F5', 'Reset the image'],
+  ['Shift+T / Shift+A / Shift+I', 'Text overlay / annotations / invert'],
+  ['Alt+C / Alt+Shift+C / Alt+X', 'Compare with next / previous prior study, close comparison'],
+  ['Alt+S / Alt+A', 'Next / previous series'],
+  ['Alt+I / Alt+N / Alt+R / Alt+E', 'Study info / notes / report / series picker'],
+  ['Ctrl+C', 'Copy the image to the clipboard'],
+  ['F4', 'Dictation on/off (types into the report)'],
+  ['Tab / double-click', 'Next tile / maximise tile']
+]
+
 export function ViewerApp() {
   const ui = useUi()
   const [ready, setReady] = useState(false)
@@ -157,25 +220,40 @@ export function ViewerApp() {
   const [active, setActive] = useState(0)
   const [maximized, setMaximized] = useState<number | null>(null)
   const [tool, setTool] = useState<ToolName>('WindowLevel')
-  const [sync, setSync] = useState(false)
+  const [locked, setLocked] = useState(true)
+  const [scrollLink, setScrollLink] = useState(false)
+  const [linkMembers, setLinkMembers] = useState<string[] | null>(null) // null = all tiles
+  const [presLink, setPresLink] = useState(false)
+  const [refLines, setRefLines] = useState(true)
+  const [refSource, setRefSource] = useState<string | null>(null) // locked source (Q)
   const [overlay, setOverlay] = useState(true)
+  const [showAnn, setShowAnn] = useState(true)
+  const [showTop, setShowTop] = useState(true)
   const [cine, setCine] = useState(false)
   const [fps, setFps] = useState(10)
   const [mpr, setMpr] = useState<MprState | null>(null)
   const [mprLoading, setMprLoading] = useState<string | null>(null)
   const [slab, setSlab] = useState(0)
   const [help, setHelp] = useState(false)
+  const [info, setInfo] = useState(false)
+  const [notes, setNotes] = useState<string | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [dictating, setDictating] = useState(false)
   const gridRef = useRef<HTMLDivElement>(null)
+  const compareIdx = useRef(-1)
 
   // Refs so event handlers always see the latest state.
   const slotsRef = useRef(slots)
   slotsRef.current = slots
   const imagesRef = useRef(imagesMap)
   imagesRef.current = imagesMap
-  const syncRef = useRef(sync)
-  syncRef.current = sync
+  const linkRef = useRef({ scrollLink, linkMembers })
+  linkRef.current = { scrollLink, linkMembers }
+  const toolRef = useRef({ tool, locked })
+  toolRef.current = { tool, locked }
   const expected = useRef(new Map<string, number>())
+
+  const isLinked = (slotId: string, l = linkRef.current) => l.scrollLink && (l.linkMembers == null || l.linkMembers.includes(slotId))
 
   // ------------------------------------------------------------ init
   useEffect(() => {
@@ -187,6 +265,15 @@ export function ViewerApp() {
       .then(() => setReady(true))
       .catch((e: unknown) => setInitError(String((e as Error)?.message ?? e)))
   }, [])
+
+  // One-shot measurement tools: back to window/level when the measurement is finished.
+  useEffect(() => {
+    if (!ready) return
+    return onAnnotationCompleted(() => {
+      const t = toolRef.current
+      if (!t.locked && !isDragMode(t.tool)) setTool('WindowLevel')
+    })
+  }, [ready])
 
   useEffect(() => {
     const el = gridRef.current
@@ -206,7 +293,7 @@ export function ViewerApp() {
     if (!ready) return
     const t = setTimeout(() => getEngine().resize(true, true), 30)
     return () => clearTimeout(t)
-  }, [ready, maximized, layout])
+  }, [ready, maximized, layout, showTop])
 
   // ------------------------------------------------------------ data helpers
   const ensureImages = useCallback(async (seriesId: number): Promise<SeriesImages> => {
@@ -260,7 +347,11 @@ export function ViewerApp() {
       if (best) await ensureImages(best.id)
       setLayout({ rows: 1, cols: 1 })
       setMaximized(null)
-      setSync(false)
+      setScrollLink(false)
+      setLinkMembers(null)
+      setPresLink(false)
+      setRefSource(null)
+      compareIdx.current = -1
       setSlots([{ id: 'vp-0', kind: 'stack', seriesId: best?.id ?? null, studyId }])
       setActive(0)
       document.title = `${detail.study.patientName} – ${detail.study.description} – Viewer`
@@ -283,7 +374,9 @@ export function ViewerApp() {
   useEvent(api.onDictationActive, (on: boolean) => setDictating(on))
   useEvent(api.onStudiesChanged, () => {
     if (currentStudyId == null) return
-    void api.getPriors(currentStudyId).then((pri) => setStudies((s) => (s.length ? [s[0], ...pri] : s)))
+    void Promise.all([api.getStudy(currentStudyId), api.getPriors(currentStudyId)]).then(([d, pri]) => {
+      if (d) setStudies([d.study, ...pri])
+    })
   })
 
   // ------------------------------------------------------------ thumbnails (generated once, then stored)
@@ -349,6 +442,21 @@ export function ViewerApp() {
     setActive((a) => Math.min(a, n - 1))
   }
 
+  /** Shift+drag = move (swap) a series between tiles, Ctrl+drag = copy. */
+  const onSeriesDrag = (from: number, to: number, copy: boolean) => {
+    setSlots((prev) => {
+      const a = prev[from]
+      const b = prev[to]
+      if (!a || !b || a.kind !== 'stack' || b.kind !== 'stack') return prev
+      return prev.map((s, i) => {
+        if (i === to) return { ...s, seriesId: a.seriesId, studyId: a.studyId }
+        if (i === from && !copy) return { ...s, seriesId: b.seriesId, studyId: b.studyId }
+        return s
+      })
+    })
+    setActive(to)
+  }
+
   // ------------------------------------------------------------ linked scrolling
   const onImageChange = useCallback((slotId: string, oldIdx: number, newIdx: number) => {
     const exp = expected.current.get(slotId)
@@ -356,13 +464,13 @@ export function ViewerApp() {
       expected.current.delete(slotId)
       if (exp === newIdx) return // this change was caused by syncing
     }
-    if (!syncRef.current) return
+    if (!isLinked(slotId)) return
     const src = slotsRef.current.find((s) => s.id === slotId)
     if (!src?.seriesId) return
     const sImgs = imagesRef.current[src.seriesId]
     const engine = getEngine()
     for (const other of slotsRef.current) {
-      if (other.id === slotId || other.kind !== 'stack' || !other.seriesId) continue
+      if (other.id === slotId || other.kind !== 'stack' || !other.seriesId || !isLinked(other.id)) continue
       const vp = engine.getViewport(other.id) as Types.IStackViewport | undefined
       if (!vp) continue
       const oImgs = imagesRef.current[other.seriesId]
@@ -385,7 +493,31 @@ export function ViewerApp() {
         void vp.setImageIdIndex(target)
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Linked window/level + zoom/pan between tiles ("I", or double-click the mouse wheel).
+  useEffect(() => {
+    if (!ready || mpr) return
+    const ids = slots.filter((s) => s.kind === 'stack' && s.seriesId != null).map((s) => s.id)
+    const t = setTimeout(() => setPresentationLink(presLink, ids), 50)
+    return () => clearTimeout(t)
+  }, [ready, presLink, slots, mpr])
+
+  // Reference lines follow the active tile unless locked with Q.
+  useEffect(() => {
+    if (!ready) return
+    const src = refSource ?? slots[active]?.id ?? ''
+    const t = setTimeout(() => {
+      try {
+        setReferenceLines(refLines && !mpr && slots.length > 1, src)
+        getEngine().render()
+      } catch {
+        /* viewports not ready */
+      }
+    }, 60)
+    return () => clearTimeout(t)
+  }, [ready, refLines, refSource, active, slots, mpr])
 
   // ------------------------------------------------------------ MPR
   const enterMpr = async () => {
@@ -407,6 +539,7 @@ export function ViewerApp() {
     )
     setActive(0)
     setTool('Crosshairs')
+    setLocked(true)
   }
 
   useEffect(() => {
@@ -465,6 +598,19 @@ export function ViewerApp() {
     if (ready) setPrimaryTool(tool, !!mpr)
   }, [tool, mpr, ready])
 
+  const chooseTool = (t: ToolName, lock: boolean) => {
+    setTool(t)
+    setLocked(lock || isDragMode(t))
+  }
+
+  const cycleDragMode = (): DragMode => {
+    const cur = toolRef.current.tool
+    const next = isDragMode(cur) ? DRAG_MODES[(DRAG_MODES.indexOf(cur) + 1) % DRAG_MODES.length] : 'WindowLevel'
+    setTool(next)
+    setLocked(true)
+    return next
+  }
+
   const activeVp = (): Types.IViewport | undefined => {
     const slot = slotsRef.current[active]
     return slot ? getEngine().getViewport(slot.id) : undefined
@@ -484,16 +630,18 @@ export function ViewerApp() {
     vp?.render()
   }
 
-  const transform = (kind: 'invert' | 'rotate' | 'flip' | 'reset') => {
+  const transform = (kind: 'invert' | 'rotateR' | 'rotateL' | 'flipH' | 'flipV' | 'reset' | 'fit' | 'actual') => {
     const vp = activeVp() as Types.IStackViewport | undefined
     if (!vp) return
     if (kind === 'invert') vp.setProperties({ invert: !vp.getProperties().invert })
-    else if (kind === 'rotate') {
+    else if (kind === 'rotateR' || kind === 'rotateL') {
       const rot = vp.getViewPresentation().rotation ?? 0
-      vp.setViewPresentation({ rotation: (rot + 90) % 360 })
-    } else if (kind === 'flip') {
-      vp.setViewPresentation({ flipHorizontal: !vp.getViewPresentation().flipHorizontal })
-    } else {
+      vp.setViewPresentation({ rotation: (rot + (kind === 'rotateR' ? 90 : 270)) % 360 })
+    } else if (kind === 'flipH') vp.setViewPresentation({ flipHorizontal: !vp.getViewPresentation().flipHorizontal })
+    else if (kind === 'flipV') vp.setViewPresentation({ flipVertical: !vp.getViewPresentation().flipVertical })
+    else if (kind === 'fit') zoomToFit(vp)
+    else if (kind === 'actual') zoomActualSize(vp)
+    else {
       vp.resetCamera()
       vp.resetProperties()
     }
@@ -547,10 +695,11 @@ export function ViewerApp() {
     getEngine().render()
   }
 
-  const keyImage = async () => {
+  /** The active tile as an image, with measurements burnt in. */
+  const captureActive = async (maxW = 0, type: 'image/jpeg' | 'image/png' = 'image/png') => {
     const slot = slotsRef.current[active]
     const vp = activeVp()
-    if (!vp || !slot) return
+    if (!vp || !slot) return null
     const src = vp.canvas
     const out = document.createElement('canvas')
     out.width = src.width
@@ -559,9 +708,8 @@ export function ViewerApp() {
     ctx.fillStyle = '#000'
     ctx.fillRect(0, 0, out.width, out.height)
     ctx.drawImage(src, 0, 0)
-    // Burn in the measurements (drawn by Cornerstone as an SVG layer).
     const svg = (vp.element as HTMLElement).querySelector('svg')
-    if (svg) {
+    if (svg && showAnn) {
       const clone = svg.cloneNode(true) as SVGSVGElement
       clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
       clone.setAttribute('width', String(svg.clientWidth))
@@ -578,10 +726,8 @@ export function ViewerApp() {
       })
       URL.revokeObjectURL(url)
     }
-    // Downscale very large captures to keep reports small.
-    const maxW = 900
     let final = out
-    if (out.width > maxW) {
+    if (maxW && out.width > maxW) {
       final = document.createElement('canvas')
       final.width = maxW
       final.height = Math.round((out.height * maxW) / out.width)
@@ -591,23 +737,47 @@ export function ViewerApp() {
     let imageNo = ''
     if (vp.type === CoreEnums.ViewportType.STACK) imageNo = `, image ${(vp as Types.IStackViewport).getCurrentImageIdIndex() + 1}`
     const caption = `${series ? `Series ${series.number ?? ''} ${series.description}`.trim() : slot.kind.toUpperCase()}${imageNo}`
-    await api.sendKeyImage({ dataUrl: final.toDataURL('image/jpeg', 0.9), caption })
-    ui.toast('Key image sent to the report', 'success')
+    return { dataUrl: final.toDataURL(type, 0.9), caption }
   }
 
-  const compareWithPrior = async () => {
-    const cur = studies[0]
-    const prior = studies.find((s) => s.id !== cur?.id)
-    if (!cur || !prior) {
-      ui.toast('No previous study for this patient.', 'info')
-      return
+  const keyImage = async () => {
+    const shot = await captureActive(900, 'image/jpeg')
+    if (!shot) return
+    await api.sendKeyImage(shot)
+    ui.toast('Key image (bookmark) sent to the report', 'success')
+  }
+
+  const copyImage = async () => {
+    const shot = await captureActive()
+    if (!shot) return
+    try {
+      const blob = await (await fetch(shot.dataUrl)).blob()
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      ui.toast('Image copied to the clipboard', 'success')
+    } catch (e) {
+      ui.toast(`Could not copy: ${(e as Error).message}`, 'error')
     }
+  }
+
+  const saveImage = async () => {
+    const shot = await captureActive()
+    if (!shot) return
+    const st = studies[0]
+    const file = await api.saveImage(shot.dataUrl, `${st?.patientName ?? 'image'} ${shot.caption}`)
+    if (file) ui.toast(`Saved ${file}`, 'success')
+  }
+
+  // ------------------------------------------------------------ comparisons (Alt+C / Alt+Shift+C / Alt+X)
+  const compareWith = async (prior: StudyRow) => {
+    const cur = studies[0]
+    if (!cur) return
     if (mpr) exitMpr()
     const curSeriesList = seriesMap[cur.id] ?? (await ensureSeries(cur.id))
     const priorSeries = await ensureSeries(prior.id)
     setShown((s) => (s.includes(prior.id) ? s : [...s, prior.id]))
     const curSlot = slotsRef.current[active]
-    const curSeries = curSeriesList.find((s) => s.id === curSlot?.seriesId) ?? pickBestSeries(curSeriesList)
+    const keepCurrent = curSlot?.studyId === cur.id ? curSlot : slotsRef.current.find((s) => s.studyId === cur.id)
+    const curSeries = curSeriesList.find((s) => s.id === keepCurrent?.seriesId) ?? pickBestSeries(curSeriesList)
     if (!curSeries) return
     const match = matchSeries(curSeries, priorSeries)
     await ensureImages(curSeries.id)
@@ -619,8 +789,45 @@ export function ViewerApp() {
       { id: 'vp-1', kind: 'stack', seriesId: match?.id ?? null, studyId: match ? prior.id : null }
     ])
     setActive(0)
-    setSync(true)
-    ui.toast('Comparing with the previous study – scrolling is linked. Align both, then scroll.', 'info')
+    setScrollLink(true)
+    setLinkMembers(null)
+    ui.toast(`Comparing with ${prior.description || 'prior'} (${formatDicomDate(prior.studyDate)}) – scrolling linked`, 'info')
+  }
+
+  const compareStep = (dir: 1 | -1) => {
+    const priors = studies.slice(1)
+    if (!priors.length) {
+      ui.toast('No previous study for this patient.', 'info')
+      return
+    }
+    compareIdx.current = (compareIdx.current + dir + priors.length) % priors.length
+    void compareWith(priors[compareIdx.current])
+  }
+
+  const closeComparison = async () => {
+    const cur = studies[0]
+    if (!cur) return
+    if (mpr) exitMpr()
+    setShown([cur.id])
+    compareIdx.current = -1
+    const curSlot = slotsRef.current.find((s) => s.studyId === cur.id && s.seriesId != null)
+    const seriesId = curSlot?.seriesId ?? pickBestSeries(seriesMap[cur.id] ?? [])?.id ?? null
+    if (seriesId != null) await ensureImages(seriesId)
+    setLayout({ rows: 1, cols: 1 })
+    setSlots([{ id: 'vp-0', kind: 'stack', seriesId, studyId: cur.id }])
+    setActive(0)
+    setScrollLink(false)
+  }
+
+  /** Alt+S / Alt+A: next / previous series of the same study in the active tile. */
+  const stepSeries = (dir: 1 | -1) => {
+    const slot = slotsRef.current[active]
+    if (!slot || slot.kind !== 'stack' || slot.studyId == null) return
+    const list = (seriesMap[slot.studyId] ?? []).filter((s) => s.isImage && s.numImages > 0)
+    if (!list.length) return
+    const i = list.findIndex((s) => s.id === slot.seriesId)
+    const next = list[(i + dir + list.length) % list.length]
+    void loadIntoSlot(active, next.id, slot.studyId)
   }
 
   const toggleShown = async (studyId: number) => {
@@ -635,55 +842,121 @@ export function ViewerApp() {
     }
   }
 
-  // ------------------------------------------------------------ keyboard
+  // ------------------------------------------------------------ linking helpers (S K C J I Q U)
+  const toggleScrollLink = () => {
+    setScrollLink((on) => {
+      ui.toast(on ? 'Linked scrolling off' : 'Linked scrolling on', 'info')
+      return !on
+    })
+    setLinkMembers(null)
+  }
+  const toggleLinkMember = () => {
+    const id = slotsRef.current[active]?.id
+    if (!id) return
+    if (!scrollLink) {
+      setScrollLink(true)
+      setLinkMembers([id])
+      ui.toast('Tile added to linked scrolling', 'info')
+      return
+    }
+    const all = slotsRef.current.map((s) => s.id)
+    const cur = linkMembers ?? all
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
+    setLinkMembers(next)
+    ui.toast(cur.includes(id) ? 'Tile removed from linked scrolling' : 'Tile added to linked scrolling', 'info')
+  }
+  const togglePresLink = () => {
+    setPresLink((on) => {
+      ui.toast(on ? 'Window/level + zoom link off' : 'Window/level + zoom linked between tiles', 'info')
+      return !on
+    })
+  }
+
+  const saveNotes = async () => {
+    if (notes == null || currentStudyId == null) return
+    await api.updateStudy(currentStudyId, { clinicalHistory: notes })
+    setNotes(null)
+    ui.toast('Notes saved (shown in the report’s Clinical Details)', 'success')
+  }
+
+  // ------------------------------------------------------------ keyboard (Synapse hot keys)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) return
       if (document.querySelector('.modal-backdrop')) return
+      if (menu) {
+        if (e.key === 'Escape') setMenu(null)
+        return
+      }
       const k = e.key
-      const lower = k.toLowerCase()
+      const lower = k.length === 1 ? k.toLowerCase() : k
+      const numpad = /^Numpad(\d)$/.exec(e.code)
+
       if (k === 'F4') void api.toggleDictation()
+      else if (k === 'F5') transform('reset')
+      else if (e.ctrlKey && !e.altKey && lower === 'c') void copyImage()
+      else if (e.altKey && lower === 'c') compareStep(e.shiftKey ? -1 : 1)
+      else if (e.altKey && lower === 'x') void closeComparison()
+      else if (e.altKey && lower === 's') stepSeries(1)
+      else if (e.altKey && lower === 'a') stepSeries(-1)
+      else if (e.altKey && lower === 'r') {
+        if (currentStudyId != null) void api.openReportFor(currentStudyId)
+      }
+      else if (e.altKey && lower === 'i') setInfo(true)
+      else if (e.altKey && lower === 'n') setNotes(studies[0]?.clinicalHistory ?? '')
+      else if (e.altKey && lower === 'e') setShowTop((v) => !v)
+      else if (e.shiftKey && lower === 't') setOverlay((v) => !v)
+      else if (e.shiftKey && lower === 'a') setShowAnn((v) => !v)
+      else if (e.shiftKey && lower === 'i') transform('invert')
       else if (k === 'ArrowUp' || k === 'ArrowLeft') scrollActive(-1)
       else if (k === 'ArrowDown' || k === 'ArrowRight') scrollActive(1)
       else if (k === 'PageUp') scrollActive(-10)
       else if (k === 'PageDown') scrollActive(10)
       else if (k === 'Home') jumpActive('first')
       else if (k === 'End') jumpActive('last')
-      else if (/^[1-9]$/.test(k)) {
-        const p = CT_PRESETS.find((x) => x.key === k)
-        if (p) applyPreset(p.ww, p.wc)
-      } else if (k === '0') resetVoi()
+      else if (numpad || /^[0-9]$/.test(k)) {
+        const d = numpad ? numpad[1] : k
+        if (d === '0') resetVoi()
+        else {
+          const p = CT_PRESETS.find((x) => x.key === d)
+          if (p) applyPreset(p.ww, p.wc)
+        }
+      } else if (k === '=' || k === '+') transform('fit')
+      else if (k === '-') transform('actual')
       else if (k === ' ') toggleCine()
       else if (k === 'Delete' || k === 'Backspace') deleteSelectedAnnotations()
       else if (k === 'Escape') {
-        if (mpr) exitMpr()
-        else setTool('WindowLevel')
-      } else if (k === 'Tab') {
-        setActive((a) => (a + 1) % slotsRef.current.length)
-      } else if (!e.ctrlKey && !e.altKey) {
-        const map: Record<string, ToolName> = {
-          w: 'WindowLevel',
-          h: 'Pan',
-          z: 'Zoom',
-          s: 'StackScroll',
-          l: 'Length',
-          a: 'Angle',
-          e: 'EllipticalROI',
-          o: 'RectangleROI',
-          p: 'Probe',
-          t: 'ArrowAnnotate',
-          b: 'Bidirectional',
-          g: 'Magnify',
-          x: 'Eraser'
-        }
-        if (map[lower]) setTool(map[lower])
-        else if (lower === 'i') transform('invert')
-        else if (lower === 'r') transform('reset')
-        else if (lower === 'f') transform('flip')
-        else if (lower === 'k') void keyImage()
+        if (!isDragMode(tool) && tool !== 'Crosshairs') chooseTool('WindowLevel', true)
+        else if (mpr) exitMpr()
+        else chooseTool('WindowLevel', true)
+      } else if (k === 'Tab') setActive((a) => (a + 1) % slotsRef.current.length)
+      else if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (HOTKEY_TOOLS[lower]) chooseTool(HOTKEY_TOOLS[lower], isDragMode(HOTKEY_TOOLS[lower]))
+        else if (lower === 'l') {
+          setLocked(true)
+          ui.toast(`${TOOL_LABEL[tool]} locked (Esc to release)`, 'info')
+        } else if (lower === 'b') void keyImage()
+        else if (lower === 'i') togglePresLink()
+        else if (lower === 's') toggleScrollLink()
+        else if (lower === 'k') toggleLinkMember()
+        else if (lower === 'c') {
+          setScrollLink(false)
+          setLinkMembers(null)
+          ui.toast('Linked scrolling: all tiles removed', 'info')
+        } else if (lower === 'j') {
+          setScrollLink(true)
+          setLinkMembers(null)
+          ui.toast('Linked scrolling: all tiles linked', 'info')
+        } else if (lower === 'q') {
+          setRefLines(true)
+          setRefSource(slotsRef.current[active]?.id ?? null)
+          ui.toast('Reference lines locked to this tile', 'info')
+        } else if (lower === 'u') {
+          setRefSource(null)
+          ui.toast('Reference lines unlocked', 'info')
+        } else if (lower === 'n') toggleCine()
         else if (lower === 'm') void (mpr ? exitMpr() : enterMpr())
-        else if (lower === 'c') void compareWithPrior()
         else return
       } else return
       e.preventDefault()
@@ -712,147 +985,258 @@ export function ViewerApp() {
   }
 
   const toolBtn = (t: ToolName, title: string, icon: ReactNode) => (
-    <VBtn title={title} active={tool === t} onClick={() => setTool(t)}>
+    <VBtn title={title} active={tool === t} onClick={() => chooseTool(t, true)}>
       {icon}
     </VBtn>
   )
 
+  const presetItems: MenuItem[] = [
+    { label: 'Original (from scanner)', hint: '0', onClick: resetVoi },
+    ...CT_PRESETS.map((p) => ({ label: `${p.name}  (${p.ww}/${p.wc})`, hint: p.key, onClick: () => applyPreset(p.ww, p.wc) }))
+  ]
+  const menuItems: MenuItem[] = [
+    { label: 'Window Level', checked: tool === 'WindowLevel', onClick: () => chooseTool('WindowLevel', true) },
+    { label: 'Zoom', checked: tool === 'Zoom', onClick: () => chooseTool('Zoom', true) },
+    { label: 'Pan', checked: tool === 'Pan', onClick: () => chooseTool('Pan', true) },
+    { label: 'Ruler', hint: 'R', checked: tool === 'Length', onClick: () => chooseTool('Length', false) },
+    { label: 'Text', hint: 'T', checked: tool === 'Label', onClick: () => chooseTool('Label', false) },
+    { label: 'Arrow', hint: 'A', checked: tool === 'ArrowAnnotate', onClick: () => chooseTool('ArrowAnnotate', false) },
+    { label: 'Density Value', hint: 'D', checked: tool === 'Probe', onClick: () => chooseTool('Probe', false) },
+    { label: 'Lock Tools', hint: 'L', checked: locked && !isDragMode(tool), onClick: () => setLocked(true) },
+    'sep',
+    { label: 'Image Presets', submenu: presetItems },
+    {
+      label: 'Scale, Rotate, Flip',
+      submenu: [
+        { label: 'Zoom to fit', hint: '=', onClick: () => transform('fit') },
+        { label: 'Zoom 1:1', hint: '-', onClick: () => transform('actual') },
+        'sep',
+        { label: 'Rotate right 90°', onClick: () => transform('rotateR') },
+        { label: 'Rotate left 90°', onClick: () => transform('rotateL') },
+        { label: 'Flip horizontal', onClick: () => transform('flipH') },
+        { label: 'Flip vertical', onClick: () => transform('flipV') },
+        { label: 'Invert', hint: 'Shift+I', onClick: () => transform('invert') }
+      ]
+    },
+    {
+      label: 'Tools',
+      submenu: [
+        { label: 'Show Text Overlay', hint: 'Shift+T', checked: overlay, onClick: () => setOverlay((v) => !v) },
+        { label: 'Show Annotations', hint: 'Shift+A', checked: showAnn, onClick: () => setShowAnn((v) => !v) },
+        'sep',
+        { label: 'Angle', hint: 'G', onClick: () => chooseTool('Angle', false) },
+        { label: 'Cobb Angle', onClick: () => chooseTool('CobbAngle', false) },
+        { label: 'Freehand ROI', hint: 'F', onClick: () => chooseTool('FreehandROI', false) },
+        { label: 'Elliptical ROI', hint: 'E', onClick: () => chooseTool('EllipticalROI', false) },
+        { label: 'Rectangular ROI', onClick: () => chooseTool('RectangleROI', false) },
+        { label: 'Bidirectional (long/short axis)', onClick: () => chooseTool('Bidirectional', false) },
+        { label: 'Magnifying Glass', hint: 'O', onClick: () => chooseTool('Magnify', false) },
+        { label: 'Eraser', hint: 'X', onClick: () => chooseTool('Eraser', true) },
+        'sep',
+        { label: 'Bookmark Image (key image to report)', hint: 'B', onClick: () => void keyImage() },
+        { label: 'Delete all measurements', onClick: () => void clearAnnotations() }
+      ]
+    },
+    {
+      label: 'Reference Lines',
+      submenu: [
+        { label: 'Show reference lines', checked: refLines, onClick: () => setRefLines((v) => !v) },
+        { label: 'Lock to this tile', hint: 'Q', checked: refSource != null, onClick: () => setRefSource(slots[active]?.id ?? null) },
+        { label: 'Unlock', hint: 'U', onClick: () => setRefSource(null) }
+      ]
+    },
+    { label: 'Save Image…', onClick: () => void saveImage() },
+    'sep',
+    { label: 'Copy To Clipboard', hint: 'Ctrl+C', onClick: () => void copyImage() },
+    'sep',
+    {
+      label: 'Clear View',
+      disabled: slots[active]?.kind !== 'stack',
+      onClick: () => setSlots((prev) => prev.map((s, i) => (i === active ? { ...s, seriesId: null, studyId: null } : s)))
+    },
+    {
+      label: 'Tile Formats',
+      submenu: LAYOUTS.map(([r, c]) => ({
+        label: `${r} × ${c}`,
+        checked: !mpr && layout.rows === r && layout.cols === c,
+        onClick: () => void applyLayout(r, c)
+      }))
+    },
+    {
+      label: 'Link / Scroll',
+      submenu: [
+        { label: 'Linked scrolling', hint: 'S', checked: scrollLink, onClick: toggleScrollLink },
+        { label: 'Add / remove this tile', hint: 'K', checked: isLinked(slots[active]?.id ?? ''), onClick: toggleLinkMember },
+        { label: 'Remove all', hint: 'C', onClick: () => (setScrollLink(false), setLinkMembers(null)) },
+        { label: 'Auto link all tiles', hint: 'J', onClick: () => (setScrollLink(true), setLinkMembers(null)) },
+        'sep',
+        { label: 'Link window/level + zoom', hint: 'I', checked: presLink, onClick: togglePresLink }
+      ]
+    },
+    'sep',
+    { label: 'Cine', hint: 'N', checked: cine, onClick: toggleCine },
+    { label: 'Compare with prior', hint: 'Alt+C', disabled: studies.length < 2, onClick: () => compareStep(1) },
+    { label: 'Reset image', hint: 'F5', onClick: () => transform('reset') },
+    'sep',
+    { label: mpr ? 'Exit MPR View' : 'MPR View…', hint: 'M', onClick: () => void (mpr ? exitMpr() : enterMpr()) }
+  ]
+
+  const cur = studies[0]
+  let nat: ReturnType<typeof getNatural> = null
+  if (info && ready && slots[active]) {
+    try {
+      const vp = getEngine().getViewport(slots[active].id) as Types.IStackViewport | undefined
+      if (vp && vp.type === CoreEnums.ViewportType.STACK) nat = getNatural(vp.getCurrentImageId())
+    } catch {
+      nat = null
+    }
+  }
+
   return (
     <div className="viewer">
-      <div className="v-top">
-        <div className="v-studies">
-          <div className="v-studies-table">
-            <table>
-              <thead>
-                <tr>
-                  <th></th>
-                  <th>Proc Description</th>
-                  <th>Date</th>
-                  <th>Accession</th>
-                  <th>Img</th>
-                </tr>
-              </thead>
-              <tbody>
-                {studies.map((s) => (
-                  <tr
-                    key={s.id}
-                    className={`${s.id === currentStudyId ? 'current' : ''} ${shown.includes(s.id) ? 'shown' : ''}`}
-                    onClick={() => void toggleShown(s.id)}
-                    title={s.id === currentStudyId ? 'Current study' : 'Click to show/hide this study’s series for comparison'}
-                  >
-                    <td>
-                      <input type="checkbox" readOnly checked={shown.includes(s.id)} disabled={s.id === currentStudyId} />
-                    </td>
-                    <td>{s.description || s.modalities}</td>
-                    <td>
-                      {formatDicomDate(s.studyDate)} {formatDicomTime(s.studyTime)}
-                    </td>
-                    <td>{s.accession}</td>
-                    <td>{s.numImages}</td>
+      {showTop && (
+        <div className="v-top">
+          <div className="v-studies">
+            <div className="v-studies-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>Proc Description</th>
+                    <th>Date</th>
+                    <th>Accession</th>
+                    <th>Img</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {studies.map((s) => (
+                    <tr
+                      key={s.id}
+                      className={`${s.id === currentStudyId ? 'current' : ''} ${shown.includes(s.id) ? 'shown' : ''}`}
+                      onClick={() => void toggleShown(s.id)}
+                      title={s.id === currentStudyId ? 'Current study' : 'Click to show/hide this study’s series for comparison'}
+                    >
+                      <td>
+                        <input type="checkbox" readOnly checked={shown.includes(s.id)} disabled={s.id === currentStudyId} />
+                      </td>
+                      <td>{s.description || s.modalities}</td>
+                      <td>
+                        {formatDicomDate(s.studyDate)} {formatDicomTime(s.studyTime)}
+                      </td>
+                      <td>{s.accession}</td>
+                      <td>{s.numImages}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="v-strip">
+            {studies.length === 0 && <div className="v-welcome">Open a study from the worklist (Report or Images button).</div>}
+            {shown.map((sid) => {
+              const st = studyById.get(sid)
+              if (!st) return null
+              return [
+                <div key={`tab-${sid}`} className={`v-study-tab ${sid === currentStudyId ? 'current' : ''}`}>
+                  <b>{st.modalities.split('\\')[0]}</b>
+                  <span>{formatDicomDate(st.studyDate)}</span>
+                  <span>[{st.numImages}]</span>
+                </div>,
+                ...(seriesMap[sid] ?? []).map((se) => (
+                  <div
+                    key={se.id}
+                    className={`v-thumb ${se.isImage ? '' : 'disabled'} ${inView.has(se.id) ? 'in-view' : ''} ${activeSeriesId === se.id ? 'in-active' : ''}`}
+                    title={`${se.description || '(no description)'} – ${se.numFrames} image(s)`}
+                    draggable={se.isImage}
+                    onDragStart={(e) => e.dataTransfer.setData('application/x-series', JSON.stringify({ seriesId: se.id, studyId: sid }))}
+                    onClick={() => se.isImage && void loadIntoSlot(active, se.id, sid)}
+                  >
+                    <div className="v-thumb-img">
+                      {thumbs[se.id] || se.thumb ? (
+                        <img src={thumbs[se.id] || se.thumb || ''} alt="" draggable={false} />
+                      ) : (
+                        <span className="ph">{se.isImage ? '…' : se.modality || 'non-image'}</span>
+                      )}
+                    </div>
+                    <span className="v-thumb-count">{se.numFrames}</span>
+                    <div className="v-thumb-label">
+                      {se.number ?? ''} {se.description || se.modality}
+                    </div>
+                  </div>
+                ))
+              ]
+            })}
           </div>
         </div>
-        <div className="v-strip">
-          {studies.length === 0 && <div className="v-welcome">Open a study from the worklist (Report or Images button).</div>}
-          {shown.map((sid) => {
-            const st = studyById.get(sid)
-            if (!st) return null
-            return [
-              <div key={`tab-${sid}`} className={`v-study-tab ${sid === currentStudyId ? 'current' : ''}`}>
-                <b>{st.modalities.split('\\')[0]}</b>
-                <span>{formatDicomDate(st.studyDate)}</span>
-                <span>[{st.numImages}]</span>
-              </div>,
-              ...(seriesMap[sid] ?? []).map((se) => (
-                <div
-                  key={se.id}
-                  className={`v-thumb ${se.isImage ? '' : 'disabled'} ${inView.has(se.id) ? 'in-view' : ''} ${activeSeriesId === se.id ? 'in-active' : ''}`}
-                  title={`${se.description || '(no description)'} – ${se.numFrames} image(s)`}
-                  draggable={se.isImage}
-                  onDragStart={(e) => e.dataTransfer.setData('application/x-series', JSON.stringify({ seriesId: se.id, studyId: sid }))}
-                  onClick={() => se.isImage && void loadIntoSlot(active, se.id, sid)}
-                >
-                  <div className="v-thumb-img">
-                    {thumbs[se.id] || se.thumb ? (
-                      <img src={thumbs[se.id] || se.thumb || ''} alt="" draggable={false} />
-                    ) : (
-                      <span className="ph">{se.isImage ? '…' : se.modality || 'non-image'}</span>
-                    )}
-                  </div>
-                  <span className="v-thumb-count">{se.numFrames}</span>
-                  <div className="v-thumb-label">
-                    {se.number ?? ''} {se.description || se.modality}
-                  </div>
-                </div>
-              ))
-            ]
-          })}
-        </div>
-      </div>
+      )}
 
       <div className="v-toolbar">
+        <VBtn title="Study information (Alt+I)" onClick={() => setInfo(true)} disabled={!cur}>
+          <Info size={17} />
+        </VBtn>
+        <VBtn title="Report (Alt+R)" onClick={() => currentStudyId != null && void api.openReportFor(currentStudyId)} disabled={currentStudyId == null}>
+          <FileText size={17} />
+        </VBtn>
+        <VBtn title="Notes / clinical history (Alt+N)" onClick={() => setNotes(cur?.clinicalHistory ?? '')} disabled={!cur}>
+          <StickyNote size={17} />
+        </VBtn>
+        <VBtn title="Series picker on/off (Alt+E)" on={showTop} onClick={() => setShowTop((v) => !v)}>
+          <PanelTop size={17} />
+        </VBtn>
+        <span className="v-sep" />
         {LAYOUTS.map(([r, c]) => (
-          <VBtn key={`${r}x${c}`} title={`Layout ${r}×${c}`} active={!mpr && layout.rows === r && layout.cols === c} onClick={() => void applyLayout(r, c)}>
+          <VBtn key={`${r}x${c}`} title={`Tile format ${r}×${c}`} active={!mpr && layout.rows === r && layout.cols === c} onClick={() => void applyLayout(r, c)}>
             <LayoutIcon r={r} c={c} />
           </VBtn>
         ))}
         <span className="v-sep" />
-        {toolBtn('WindowLevel', 'Window/level (W) – drag', <SunMoon size={17} />)}
-        {toolBtn('Pan', 'Pan (H) – also middle mouse button', <Hand size={17} />)}
-        {toolBtn('Zoom', 'Zoom (Z) – also right mouse button', <ZoomIn size={17} />)}
-        {toolBtn('StackScroll', 'Scroll by dragging (S) – mouse wheel always scrolls', <ChevronsUpDown size={17} />)}
-        {toolBtn('Magnify', 'Magnifying glass (G)', <Search size={17} />)}
+        {toolBtn('WindowLevel', 'Window level (left-drag; Alt+drag)', <SunMoon size={17} />)}
+        {toolBtn('Zoom', 'Zoom (Alt+Ctrl+drag; hold left + right-click to switch)', <ZoomIn size={17} />)}
+        {toolBtn('Pan', 'Pan (Alt+Shift+drag)', <Hand size={17} />)}
+        {toolBtn('Magnify', 'Magnifying glass (O)', <Search size={17} />)}
         <span className="v-sep" />
-        {toolBtn('Length', 'Length (L)', <Ruler size={17} />)}
-        {toolBtn('Angle', 'Angle (A)', <Triangle size={17} />)}
+        {toolBtn('Length', 'Ruler (R)', <Ruler size={17} />)}
+        {toolBtn('Angle', 'Angle (G)', <Triangle size={17} />)}
         {toolBtn('EllipticalROI', 'Elliptical ROI – mean/SD HU, area (E)', <Ellipse size={17} />)}
-        {toolBtn('RectangleROI', 'Rectangle ROI (O)', <Square size={17} />)}
-        {toolBtn('Probe', 'Probe – pixel value / HU (P)', <Crosshair size={17} />)}
-        {toolBtn('Bidirectional', 'Bidirectional – long & short axis (B)', <Move size={17} />)}
-        {toolBtn('ArrowAnnotate', 'Arrow with text (T)', <ArrowUpRight size={17} />)}
+        {toolBtn('FreehandROI', 'Freehand ROI (F)', <Lasso size={17} />)}
+        {toolBtn('Probe', 'Density value – HU (D)', <Crosshair size={17} />)}
+        {toolBtn('ArrowAnnotate', 'Arrow (A)', <ArrowUpRight size={17} />)}
+        {toolBtn('Label', 'Text (T)', <Type size={17} />)}
         {toolBtn('Eraser', 'Eraser – click a measurement to delete (X)', <Eraser size={17} />)}
-        <VBtn title="Remove all measurements" onClick={() => void clearAnnotations()}>
-          <Trash size={17} />
+        <VBtn title={locked ? 'Tool locked (Esc releases)' : 'Lock the current tool (L)'} on={locked && !isDragMode(tool)} onClick={() => setLocked((v) => !v)}>
+          {locked ? <Lock size={16} /> : <LockOpen size={16} />}
         </VBtn>
         <span className="v-sep" />
         <select
           className="v-select"
-          title="Window presets (keys 1–9, 0 = default)"
+          title="Image presets (keys 1–9 / number pad, 0 = original)"
           value=""
           onChange={(e) => {
             const v = e.target.value
             if (v === 'default') resetVoi()
             else {
-              const p = CT_PRESETS.find((x) => x.key === v)
+              const p = CT_PRESETS[Number(v)]
               if (p) applyPreset(p.ww, p.wc)
             }
           }}
         >
-          <option value="">Window presets…</option>
-          <option value="default">0 · Default (from DICOM)</option>
-          {CT_PRESETS.map((p) => (
-            <option key={p.key} value={p.key}>
-              {p.key} · {p.name} ({p.ww}/{p.wc})
+          <option value="">Image presets…</option>
+          <option value="default">0 · Original (from scanner)</option>
+          {CT_PRESETS.map((p, i) => (
+            <option key={p.name} value={i}>
+              {p.key ? `${p.key} · ` : ''}
+              {p.name} ({p.ww}/{p.wc})
             </option>
           ))}
         </select>
-        <VBtn title="Invert (I)" onClick={() => transform('invert')}>
+        <VBtn title="Invert (Shift+I)" onClick={() => transform('invert')}>
           <Contrast size={17} />
         </VBtn>
-        <VBtn title="Rotate 90°" onClick={() => transform('rotate')}>
-          <RotateCw size={17} />
-        </VBtn>
-        <VBtn title="Flip horizontal (F)" onClick={() => transform('flip')}>
-          <ArrowLeftRight size={17} />
-        </VBtn>
-        <VBtn title="Reset view (R)" onClick={() => transform('reset')}>
+        <VBtn title="Reset image (F5)" onClick={() => transform('reset')}>
           <RotateCcw size={17} />
         </VBtn>
         <span className="v-sep" />
-        <VBtn title="MPR – axial / sagittal / coronal (M)" on={!!mpr} onClick={() => void (mpr ? exitMpr() : enterMpr())}>
+        <VBtn title="MPR view – axial / sagittal / coronal (M)" on={!!mpr} onClick={() => void (mpr ? exitMpr() : enterMpr())}>
           <Box size={17} /> MPR
         </VBtn>
         {mpr && (
@@ -868,13 +1252,24 @@ export function ViewerApp() {
             </select>
           </>
         )}
-        <VBtn title="Link scrolling between viewports" on={sync} onClick={() => setSync((s) => !s)}>
+        <VBtn title="Linked scrolling (S) – K adds/removes this tile" on={scrollLink} onClick={toggleScrollLink}>
           <Link2 size={17} />
         </VBtn>
-        <VBtn title="Compare with previous study (C)" onClick={() => void compareWithPrior()} disabled={studies.length < 2}>
-          <Columns2 size={17} /> Compare
+        <VBtn title="Link window/level + zoom between tiles (I, or double-click the mouse wheel)" on={presLink} onClick={togglePresLink}>
+          <Link size={16} />
         </VBtn>
-        <VBtn title="Cine play/pause (Space)" on={cine} onClick={toggleCine}>
+        <VBtn title="Reference lines (Q locks, U unlocks)" on={refLines} onClick={() => setRefLines((v) => !v)}>
+          <ScanLine size={17} />
+        </VBtn>
+        <VBtn title="Compare with previous study (Alt+C, Alt+Shift+C for older)" onClick={() => compareStep(1)} disabled={studies.length < 2}>
+          <Columns2 size={17} />
+        </VBtn>
+        {shown.length > 1 && (
+          <VBtn title="Close comparison (Alt+X)" onClick={() => void closeComparison()}>
+            <X size={16} />
+          </VBtn>
+        )}
+        <VBtn title="Cine play/pause (N)" on={cine} onClick={toggleCine}>
           {cine ? <Pause size={17} /> : <Play size={17} />}
         </VBtn>
         <select className="v-select" title="Cine speed" value={fps} onChange={(e) => setFps(Number(e.target.value))}>
@@ -885,20 +1280,24 @@ export function ViewerApp() {
           ))}
         </select>
         <span className="v-sep" />
-        <VBtn title="Send key image to the report (K)" onClick={() => void keyImage()}>
-          <Camera size={17} /> Key image
+        <VBtn title="Bookmark – send key image to the report (B)" onClick={() => void keyImage()}>
+          <Bookmark size={17} />
         </VBtn>
-        <VBtn title="Show/hide text overlay" on={overlay} onClick={() => setOverlay((o) => !o)}>
-          <Info size={17} />
+        <VBtn title="Text overlay on/off (Shift+T)" on={overlay} onClick={() => setOverlay((o) => !o)}>
+          <Captions size={17} />
         </VBtn>
-        <VBtn title="Keyboard shortcuts" onClick={() => setHelp(true)}>
+        <VBtn title="Mouse & keyboard shortcuts" onClick={() => setHelp(true)}>
           <CircleHelp size={17} />
         </VBtn>
         <div className="spacer" />
+        <span className="tool-indicator" title="Current left-mouse tool">
+          {TOOL_LABEL[tool]}
+          {!isDragMode(tool) && (locked ? ' 🔒' : ' (once)')}
+        </span>
         <VBtn title="Dictate into the report (F4)" on={dictating} onClick={() => void api.toggleDictation()}>
           {dictating ? <Mic size={17} /> : <MicOff size={17} />} {dictating ? 'Dictating…' : 'Dictate'}
         </VBtn>
-        <VBtn title="Open the report for this study" onClick={() => currentStudyId != null && void api.openReportFor(currentStudyId)} disabled={currentStudyId == null}>
+        <VBtn title="Open the report for this study (Alt+R)" onClick={() => currentStudyId != null && void api.openReportFor(currentStudyId)} disabled={currentStudyId == null}>
           <FileText size={17} /> Report
         </VBtn>
       </div>
@@ -918,13 +1317,24 @@ export function ViewerApp() {
               <Viewport
                 key={slot.id}
                 slot={slot}
+                index={i}
                 active={i === active && slots.length > 1}
                 hidden={maximized != null && maximized !== i}
                 study={slot.studyId != null ? studyById.get(slot.studyId) ?? null : null}
                 seriesLabel={se ? `${se.description} (Se ${se.number ?? '—'})` : ''}
                 images={slot.seriesId != null ? imagesMap[slot.seriesId] ?? null : null}
                 showOverlay={overlay}
+                showAnnotations={showAnn}
+                scrollLinked={slots.length > 1 && isLinked(slot.id)}
                 loadingText={slot.kind !== 'stack' ? mprLoading : null}
+                dragMode={isDragMode(tool) ? tool : null}
+                onCycleDragMode={cycleDragMode}
+                onContextMenu={(x, y) => {
+                  setActive(i)
+                  setMenu({ x, y })
+                }}
+                onSeriesDrag={onSeriesDrag}
+                onMiddleDoubleClick={togglePresLink}
                 onActivate={() => setActive(i)}
                 onDoubleClick={() => setMaximized((m) => (m === i ? null : slots.length > 1 ? i : null))}
                 onDropSeries={(seriesId, studyId) => void loadIntoSlot(i, seriesId, studyId)}
@@ -935,29 +1345,13 @@ export function ViewerApp() {
         {!ready && <div className="v-welcome">Starting viewer…</div>}
       </div>
 
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+
       {help && (
-        <Modal title="Viewer shortcuts" onClose={() => setHelp(false)}>
+        <Modal wide title="Viewer mouse & keyboard (Synapse-style)" onClose={() => setHelp(false)}>
           <table className="help-table">
             <tbody>
-              {[
-                ['Mouse wheel / ↑ ↓', 'Next / previous image'],
-                ['Left drag', 'Selected tool (default: window/level)'],
-                ['Middle drag', 'Pan'],
-                ['Right drag', 'Zoom'],
-                ['PgUp / PgDn, Home / End', 'Jump 10 images / first / last'],
-                ['1 – 9', 'CT window presets (1 abdomen, 2 lung, 3 bone, 4 brain …); 0 = default'],
-                ['W H Z S G', 'Window/level, pan, zoom, scroll, magnify'],
-                ['L A E O P B T X', 'Length, angle, ellipse, rectangle, probe, bidirectional, arrow, eraser'],
-                ['Delete', 'Delete selected measurement'],
-                ['I / F / R', 'Invert / flip / reset'],
-                ['M', 'MPR on/off (Esc to exit)'],
-                ['C', 'Compare with previous study'],
-                ['Space', 'Cine play / pause'],
-                ['K', 'Send key image to the report'],
-                ['F4', 'Start / stop dictation into the report'],
-                ['Tab', 'Next viewport'],
-                ['Double-click', 'Maximise / restore a viewport']
-              ].map(([k, v]) => (
+              {HELP.map(([k, v]) => (
                 <tr key={k}>
                   <td>{k}</td>
                   <td>{v}</td>
@@ -965,6 +1359,68 @@ export function ViewerApp() {
               ))}
             </tbody>
           </table>
+        </Modal>
+      )}
+
+      {info && cur && (
+        <Modal wide title="Study information" onClose={() => setInfo(false)}>
+          <div className="info-grid">
+            {[
+              ['Patient', cur.patientName],
+              ['Patient ID (CR No)', cur.patientId],
+              ['Age / Sex', [formatAge(cur.age, cur.birthDate, cur.studyDate), formatSex(cur.sex)].filter(Boolean).join(' / ')],
+              ['Birth date', formatDicomDate(cur.birthDate)],
+              ['Study', cur.description],
+              ['Accession (PG No)', cur.accession],
+              ['Study date', formatDicomDateTime(cur.studyDate, cur.studyTime)],
+              ['Referring', cur.referring],
+              ['Institution', cur.institution],
+              ['Modalities', cur.modalities.split('\\').join(', ')],
+              ['Series / images', `${cur.numSeries} / ${cur.numImages}`],
+              ['Clinical history', cur.clinicalHistory]
+            ].map(([k, v]) => (
+              <div key={k} className="info-row">
+                <span>{k}</span>
+                <b>{v || '—'}</b>
+              </div>
+            ))}
+          </div>
+          {nat && (
+            <>
+              <h4 className="info-h">Current image – DICOM attributes</h4>
+              <div className="tag-table">
+                {Object.entries(nat)
+                  .filter(([key, v]) => !/PixelData|^_/.test(key) && v != null && (typeof v !== 'object' || Array.isArray(v)))
+                  .slice(0, 400)
+                  .map(([key, v]) => (
+                    <div key={key} className="tag-row">
+                      <span>{key}</span>
+                      <span>{str(v).slice(0, 200)}</span>
+                    </div>
+                  ))}
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
+
+      {notes != null && (
+        <Modal
+          title="Notes / clinical history"
+          onClose={() => setNotes(null)}
+          footer={
+            <>
+              <div className="spacer" />
+              <button className="btn" onClick={() => setNotes(null)}>
+                Cancel
+              </button>
+              <button className="btn btn-green" onClick={() => void saveNotes()}>
+                Save
+              </button>
+            </>
+          }
+        >
+          <textarea className="notes-area" autoFocus value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Modal>
       )}
     </div>
