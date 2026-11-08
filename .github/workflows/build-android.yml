@@ -7,7 +7,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # publishes the APK as the "android-latest" release
+
+concurrency:
+  group: android-latest
+  cancel-in-progress: true
 
 jobs:
   android:
@@ -78,10 +82,14 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk "dist-android/PersonalPACS-Android-${VERSION}-build${{ github.run_number }}.apk"
           ls -la dist-android
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v7
-        with:
-          name: PersonalPACS-Android
-          path: dist-android/*.apk
-          if-no-files-found: error
-          retention-days: 30
+      # A release (not a build artifact): direct .apk download on the phone, and it doesn't use
+      # the account's artifact storage. Only the newest build is kept.
+      - name: Publish as the "Android app – latest build" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest dist-android/*.apk \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Android app – latest build" \
+            --notes "Personal PACS phone app, build ${{ github.run_number }} (commit ${GITHUB_SHA::7}). Open this page on the phone, tap the .apk to download it, then open it to install. See README › Install the phone app."

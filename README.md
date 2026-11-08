@@ -96,18 +96,18 @@ a second monitor if you have one)
 
 ## Install (Windows 10/11)
 
-1. On GitHub, open this repository's **Actions** tab, then the latest **Build Windows installer**
-   run, and download the **PersonalPACS-Windows** artifact (a zip).
-2. Unzip it and run `PersonalPACS-Setup-x.y.z.exe`. It installs for your user only, so no admin
+1. On GitHub, open this repository's **Releases** (right-hand side of the main page) and open
+   **Windows app – latest build**.
+2. Download and run `PersonalPACS-Setup-x.y.z.exe`. It installs for your user only, so no admin
    rights are needed. `PersonalPACS-Portable-x.y.z.exe` runs without installing.
 3. Windows may show "Windows protected your PC" because the app is not code-signed. Click
    **More info → Run anyway**.
 
 ### Install the phone app (Android 7 or newer)
 
-1. On your phone, open this repository on GitHub (signed in), go to **Actions → Build Android app**,
-   open the latest run and download the **PersonalPACS-Android** artifact. Unzip it to get
-   `PersonalPACS-Android-x.y.z-buildN.apk`. (Or download it on the PC and copy it to the phone.)
+1. On your phone, open this repository on GitHub (signed in), go to **Releases → Android app – latest
+   build** and tap `PersonalPACS-Android-x.y.z-buildN.apk` to download it. (Or download it on the PC
+   and copy it to the phone.)
 2. Open the APK. Android asks to allow installing apps from your browser/Files app: allow it.
    If Play Protect warns about an unknown app, choose **More details → Install anyway**.
 3. **Updates:** if the signing key is saved in the repository (see *Development → Android signing
@@ -200,7 +200,8 @@ npm run android:sync        # build the screens and copy them into android/
 cd android && ./gradlew assembleRelease   # APK (needs JDK 21 and the Android SDK)
 ```
 
-GitHub Actions builds the APK on every push (`.github/workflows/build-android.yml`).
+GitHub Actions builds the APK and the Windows installer on every push and publishes them as the
+**android-latest** and **windows-latest** releases (only the newest build is kept).
 `node scripts/android-icons.cjs` redraws the app icon and splash.
 
 **Android signing key.** Android installs an update only when it is signed with the same key as the

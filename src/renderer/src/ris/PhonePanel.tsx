@@ -128,8 +128,8 @@ export function PhonePanel() {
         <summary>Install the app · can't connect? Tips</summary>
         <ul>
           <li>
-            Get the app on the phone: on GitHub open this project's <b>Actions › Build Android app</b>, download the{' '}
-            <b>PersonalPACS-Android</b> artifact and open the APK (allow installing from your browser/Files app).
+            Get the app on the phone: on GitHub open this project's <b>Releases › Android app – latest build</b>, tap the{' '}
+            <b>.apk</b> and open it (allow installing from your browser).
           </li>
           <li>Keep Personal PACS open on this PC while syncing (it can be minimised).</li>
           <li>

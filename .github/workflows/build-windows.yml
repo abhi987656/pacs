@@ -7,7 +7,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # publishes the installer as the "windows-latest" release
+
+concurrency:
+  group: windows-latest
+  cancel-in-progress: true
 
 jobs:
   windows:
@@ -30,11 +34,15 @@ jobs:
       - name: Build installer (.exe)
         run: npm run dist:win
 
-      - name: Upload installer
-        uses: actions/upload-artifact@v7
-        with:
-          name: PersonalPACS-Windows
-          path: |
-            dist/*.exe
-          if-no-files-found: error
-          retention-days: 30
+      # A release (not a build artifact): direct .exe downloads, and it doesn't use the account's
+      # artifact storage. Only the newest build is kept.
+      - name: Publish as the "Windows app – latest build" release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete windows-latest --yes --cleanup-tag || true
+          gh release create windows-latest dist/*.exe \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Windows app – latest build" \
+            --notes "Personal PACS for Windows, build ${{ github.run_number }} (commit ${GITHUB_SHA::7}). PersonalPACS-Setup-*.exe installs for your user; PersonalPACS-Portable-*.exe runs without installing."
