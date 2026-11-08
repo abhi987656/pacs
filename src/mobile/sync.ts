@@ -143,9 +143,11 @@ export async function discover(pcId: string | null, deep: boolean): Promise<stri
     const { interfaces } = await Lan.interfaces()
     const port = store.meta.pairing?.port ?? 47820
     const candidates: string[] = []
+    // Only private Wi-Fi/hotspot networks (never the mobile-data connection).
+    const isPrivate = (a: string) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a)
     for (const i of interfaces) {
       const parts = i.address.split('.')
-      if (parts.length !== 4 || i.prefix < 16) continue
+      if (parts.length !== 4 || i.prefix < 16 || !isPrivate(i.address) || /^(rmnet|ccmni|pdp|v4-rmnet)/i.test(i.name)) continue
       const base = parts.slice(0, 3).join('.')
       for (let n = 1; n < 255; n++) {
         const ip = `${base}.${n}`
