@@ -13,8 +13,11 @@ import type {
   SpeechModelId,
   StudyFilter
 } from '@shared/types'
-import { Db } from './db'
+import { Db, syncSettingsOf } from './db'
+import { buildReportDocx, buildReportText, exportFileBase } from '@shared/reportExport'
 import { Importer } from './importer'
+import { PhoneLink } from './phoneLink'
+import { cleanManualInput } from './validate'
 import { ensureDataPaths, saveDataDir } from './paths'
 import type { DataPaths } from './paths'
 import { buildReportHtml, defaultPdfName, printHtml, renderPdf } from './print'
@@ -31,6 +34,7 @@ let paths: DataPaths
 let db: Db
 let importer: Importer
 let speech: SpeechService
+let phone: PhoneLink
 let mainWin: BrowserWindow | null = null
 let viewerWin: BrowserWindow | null = null
 let viewerReady = false
@@ -117,19 +121,7 @@ function registerIpc(): void {
     db.updateStudy(asId(id), p)
     broadcast('studies:changed')
   })
-  const cleanManual = (m: Record<string, unknown>, partial: boolean): Partial<ManualStudyInput> => {
-    const keys: (keyof ManualStudyInput)[] = [
-      'patientName', 'patientId', 'accession', 'sex', 'age', 'birthDate', 'description', 'modality',
-      'studyDate', 'studyTime', 'referring', 'visitType', 'clinicalHistory'
-    ]
-    const out: Partial<ManualStudyInput> = {}
-    for (const k of keys) {
-      const v = m?.[k]
-      if (typeof v === 'string') out[k] = v.trim().slice(0, k === 'clinicalHistory' ? 4000 : 200)
-      else if (!partial) out[k] = ''
-    }
-    return out
-  }
+  const cleanManual = cleanManualInput
   ipcMain.handle('studies:createManual', (_e, input: Record<string, unknown>) => {
     const m = cleanManual(input, false) as ManualStudyInput
     if (!m.patientName) throw new Error('Patient name is required')
@@ -305,6 +297,31 @@ function registerIpc(): void {
     return printHtml(html, paths.tmpDir)
   })
 
+  ipcMain.handle('report:export', async (e, id: unknown, kind: unknown) => {
+    const study = db.getStudy(asId(id))
+    if (!study) return null
+    const ext = kind === 'docx' ? 'docx' : 'txt'
+    const input = { study, report: db.getReport(study.id), settings: syncSettingsOf(db.getSettings()) }
+    const win = senderWindow(e.sender) ?? undefined
+    const filePath = await askSavePath(win, {
+      title: ext === 'docx' ? 'Save report as Word document' : 'Save report as text file',
+      defaultPath: join(app.getPath('documents'), `${exportFileBase(study)}.${ext}`),
+      filters: [ext === 'docx' ? { name: 'Word document', extensions: ['docx'] } : { name: 'Text file', extensions: ['txt'] }]
+    })
+    if (!filePath) return null
+    if (ext === 'docx') await writeFile(filePath, await buildReportDocx(input))
+    else await writeFile(filePath, '\ufeff' + buildReportText(input), 'utf8')
+    openFile(filePath)
+    return filePath
+  })
+
+  // ---------------- phone app
+  ipcMain.handle('phone:status', () => phone.status())
+  ipcMain.handle('phone:setEnabled', (_e, on: unknown) => phone.setEnabled(!!on))
+  ipcMain.handle('phone:startPairing', () => phone.startPairing())
+  ipcMain.handle('phone:cancelPairing', () => phone.cancelPairing())
+  ipcMain.handle('phone:removeDevice', (_e, id: unknown) => phone.removeDevice(String(id ?? '')))
+
   // ---------------- templates & macros
   ipcMain.handle('templates:list', () => db.listTemplates())
   ipcMain.handle('templates:save', (_e, t) => {
@@ -409,7 +426,17 @@ app.whenReady().then(() => {
   speech = new SpeechService(join(paths.dataDir, 'speech'), join(__dirname, 'speechWorker.js'), (e) =>
     broadcast('speech:event', e)
   )
+  phone = new PhoneLink(
+    db,
+    (e) => broadcast('phone:event', e),
+    (studyIds) => {
+      broadcast('studies:changed')
+      if (studyIds.length) broadcast('reports:changed', studyIds)
+    },
+    process.env.PACS_PHONE_PORT ? Number(process.env.PACS_PHONE_PORT) : undefined
+  )
   registerIpc()
+  void phone.init()
   mainWin = createMainWindow()
   mainWin.on('closed', () => {
     mainWin = null
@@ -424,6 +451,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   speech?.shutdown()
+  void phone?.stop()
   try {
     db?.close()
   } catch {

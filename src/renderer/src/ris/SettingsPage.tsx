@@ -5,6 +5,7 @@ import type { DataInfo, Settings } from '@shared/types'
 import { useUi } from '../common/ui'
 import { FONT_FAMILIES, FONT_SIZES } from './editor'
 import { SpeechModelsPanel } from './DictationControl'
+import { PhonePanel } from './PhonePanel'
 
 const api = window.api
 
@@ -259,6 +260,8 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
           </div>
           <p className="muted small">Remember to click “Save settings” after changing the microphone, pause, commands or corrections.</p>
         </section>
+
+        <PhonePanel />
 
         <section className="card">
           <h3>Data</h3>

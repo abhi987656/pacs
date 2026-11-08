@@ -182,7 +182,7 @@ const KEEP_CAPS = new Set([
 ])
 
 /** Inserts recognised text at the cursor with sensible spacing and capitalisation. */
-export function insertDictatedText(editor: Editor, text: string): void {
+export function insertDictatedText(editor: Editor, text: string, focus = true): void {
   const { $from } = editor.state.selection
   const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '￼')
   const atStart = before.trim() === ''
@@ -195,5 +195,6 @@ export function insertDictatedText(editor: Editor, text: string): void {
     const last = before.slice(-1)
     if (!atStart && last && !/\s/.test(last) && last !== '(' && last !== '/') t = ` ${t}`
   }
-  editor.chain().focus().insertContent({ type: 'text', text: t }).run()
+  const chain = focus ? editor.chain().focus() : editor.chain()
+  chain.insertContent({ type: 'text', text: t }).scrollIntoView().run()
 }

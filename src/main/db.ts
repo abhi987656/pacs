@@ -3,6 +3,14 @@ import { DatabaseSync } from 'node:sqlite'
 import type {
   Macro,
   ManualStudyInput,
+  PhoneDevice,
+  PullRequest,
+  PullResponse,
+  PushMacro,
+  PushReport,
+  PushResult,
+  PushStudy,
+  PushTemplate,
   Report,
   ReportSaveInput,
   ReportStatus,
@@ -11,9 +19,14 @@ import type {
   Settings,
   StudyFilter,
   StudyRow,
+  SyncMacro,
+  SyncReport,
+  SyncSettings,
+  SyncStudy,
+  SyncTemplate,
   Template
 } from '@shared/types'
-import { DEFAULT_SETTINGS } from '@shared/types'
+import { DEFAULT_SETTINGS, SYNC_SETTING_KEYS } from '@shared/types'
 
 type Row = Record<string, unknown>
 type SqlValue = string | number | null
@@ -201,6 +214,62 @@ function mapTemplate(r: Row): Template {
   }
 }
 
+function mapSyncStudy(r: Row): Omit<SyncStudy, 'listed'> {
+  return {
+    syncId: str(r.sync_id),
+    patientName: str(r.patient_name),
+    patientId: str(r.patient_id),
+    accession: str(r.accession),
+    sex: str(r.sex),
+    age: str(r.age),
+    birthDate: str(r.birth_date),
+    description: str(r.description),
+    modalities: str(r.modalities),
+    studyDate: str(r.study_date),
+    studyTime: str(r.study_time),
+    referring: str(r.referring),
+    visitType: str(r.visit_type),
+    clinicalHistory: str(r.clinical_history),
+    institution: str(r.institution),
+    numImages: num(r.num_images),
+    manual: num(r.manual) === 1,
+    reportStatus: (str(r.report_status) || 'NEW') as ReportStatus,
+    importedAt: str(r.imported_at),
+    modifiedAt: str(r.modified_at),
+    rev: num(r.rev)
+  }
+}
+
+function mapSyncReport(r: Row): SyncReport {
+  return {
+    studySyncId: str(r.study_sync_id),
+    status: str(r.status) as ReportStatus,
+    html: str(r.html),
+    text: str(r.text),
+    modality: str(r.modality),
+    procedure: str(r.procedure),
+    radiologist: str(r.radiologist),
+    templateName: str(r.template_name),
+    updatedAt: str(r.updated_at),
+    signedAt: r.signed_at == null ? null : str(r.signed_at),
+    rev: num(r.rev)
+  }
+}
+
+export function syncSettingsOf(s: Settings): SyncSettings {
+  const out: Record<string, unknown> = {}
+  for (const k of SYNC_SETTING_KEYS) out[k] = s[k]
+  return out as unknown as SyncSettings
+}
+
+/** A timestamp from the phone, clamped so a wrong phone clock cannot claim to be in the future. */
+function saneTime(iso: string): string {
+  const t = Date.parse(iso)
+  const nowMs = Date.now()
+  if (!Number.isFinite(t) || t > nowMs + 5 * 60000) return new Date(nowMs).toISOString()
+  return new Date(t).toISOString()
+}
+
 export interface StudyInsert {
   studyUid: string
   patientId: string
@@ -267,6 +336,99 @@ export class Db {
       this.db.exec('ALTER TABLE studies ADD COLUMN manual INTEGER NOT NULL DEFAULT 0')
       this.db.exec('PRAGMA user_version = 2')
     }
+    if (v < 3) this.transaction(() => this.migrateV3())
+  }
+
+  /**
+   * Phone app sync: every case/template/macro gets a permanent sync id, and every change bumps a
+   * global revision number (via triggers, so no write path can forget it). The phone asks for
+   * "everything changed since revision N". Deleted templates/macros/cases leave a tombstone.
+   */
+  private migrateV3(): void {
+    this.db.exec(`
+      ALTER TABLE studies ADD COLUMN sync_id TEXT;
+      ALTER TABLE studies ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE studies ADD COLUMN modified_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE reports ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE report_versions ADD COLUMN note TEXT NOT NULL DEFAULT '';
+      ALTER TABLE templates ADD COLUMN sync_id TEXT;
+      ALTER TABLE templates ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE macros ADD COLUMN sync_id TEXT;
+      ALTER TABLE macros ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE macros ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+      CREATE TABLE IF NOT EXISTS sync_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        rev INTEGER NOT NULL DEFAULT 1,
+        settings_rev INTEGER NOT NULL DEFAULT 1
+      );
+      INSERT OR IGNORE INTO sync_state (id, rev, settings_rev) VALUES (1, 1, 1);
+      CREATE TABLE IF NOT EXISTS tombstones (
+        kind TEXT NOT NULL,
+        sync_id TEXT NOT NULL,
+        rev INTEGER NOT NULL,
+        deleted_at TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (kind, sync_id)
+      );
+      CREATE TABLE IF NOT EXISTS devices (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_seen TEXT,
+        last_ip TEXT
+      );
+    `)
+    const ts = now()
+    for (const table of ['studies', 'templates', 'macros']) {
+      for (const r of this.all(`SELECT id FROM ${table} WHERE sync_id IS NULL`)) {
+        this.run(`UPDATE ${table} SET sync_id = ? WHERE id = ?`, randomUUID(), num(r.id))
+      }
+    }
+    this.db.exec(`
+      UPDATE studies SET rev = 1;
+      UPDATE reports SET rev = 1;
+      UPDATE templates SET rev = 1;
+      UPDATE macros SET rev = 1, updated_at = '${ts}';
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_studies_sync ON studies(sync_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_templates_sync ON templates(sync_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_macros_sync ON macros(sync_id);
+      CREATE INDEX IF NOT EXISTS idx_studies_rev ON studies(rev);
+      CREATE INDEX IF NOT EXISTS idx_reports_rev ON reports(rev);
+    `)
+    const uuidSql = `lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+      substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) ||
+      substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))`
+    const bump = 'UPDATE sync_state SET rev = rev + 1 WHERE id = 1;'
+    const cur = '(SELECT rev FROM sync_state WHERE id = 1)'
+    for (const [table, kind] of [['studies', 'study'], ['templates', 'template'], ['macros', 'macro']]) {
+      this.db.exec(`
+        CREATE TRIGGER trg_${table}_ins AFTER INSERT ON ${table} BEGIN
+          ${bump}
+          UPDATE ${table} SET rev = ${cur}, sync_id = COALESCE(NEW.sync_id, ${uuidSql}) WHERE id = NEW.id;
+          DELETE FROM tombstones WHERE kind = '${kind}' AND sync_id = NEW.sync_id;
+        END;
+        CREATE TRIGGER trg_${table}_upd AFTER UPDATE ON ${table} WHEN NEW.rev = OLD.rev BEGIN
+          ${bump}
+          UPDATE ${table} SET rev = ${cur} WHERE id = NEW.id;
+        END;
+        CREATE TRIGGER trg_${table}_del AFTER DELETE ON ${table} WHEN OLD.sync_id IS NOT NULL BEGIN
+          ${bump}
+          INSERT OR REPLACE INTO tombstones (kind, sync_id, rev, deleted_at)
+            VALUES ('${kind}', OLD.sync_id, ${cur}, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+        END;
+      `)
+    }
+    this.db.exec(`
+      CREATE TRIGGER trg_reports_ins AFTER INSERT ON reports BEGIN
+        ${bump}
+        UPDATE reports SET rev = ${cur} WHERE id = NEW.id;
+      END;
+      CREATE TRIGGER trg_reports_upd AFTER UPDATE ON reports WHEN NEW.rev = OLD.rev BEGIN
+        ${bump}
+        UPDATE reports SET rev = ${cur} WHERE id = NEW.id;
+      END;
+    `)
+    this.db.exec('PRAGMA user_version = 3')
   }
 
   close(): void {
@@ -479,21 +641,26 @@ export class Db {
     if (patch.clinicalHistory !== undefined)
       this.run('UPDATE studies SET clinical_history = ? WHERE id = ?', patch.clinicalHistory, id)
     if (patch.referring !== undefined) this.run('UPDATE studies SET referring = ? WHERE id = ?', patch.referring, id)
+    if (Object.keys(patch).length) this.run('UPDATE studies SET modified_at = ? WHERE id = ?', now(), id)
   }
 
   /** Creates a case without images so it can be reported straight away. */
-  createManualStudy(m: ManualStudyInput): number {
+  createManualStudy(m: ManualStudyInput, opts: { syncId?: string; modifiedAt?: string } = {}): number {
+    const syncId = opts.syncId ?? randomUUID()
+    const ts = now()
     return this.run(
-      `INSERT INTO studies (study_uid, patient_id, patient_name, patient_name_raw, birth_date, sex, age, study_date,
-        study_time, description, accession, referring, modalities, imported_at, visit_type, clinical_history, manual)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
-      `manual-${randomUUID()}`, m.patientId, m.patientName, m.patientName, m.birthDate, m.sex, m.age, m.studyDate,
-      m.studyTime, m.description, m.accession, m.referring, m.modality, now(), m.visitType, m.clinicalHistory
+      `INSERT INTO studies (study_uid, sync_id, patient_id, patient_name, patient_name_raw, birth_date, sex, age, study_date,
+        study_time, description, accession, referring, modalities, imported_at, visit_type, clinical_history, manual,
+        modified_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)`,
+      `manual-${syncId}`, syncId, m.patientId, m.patientName, m.patientName, m.birthDate, m.sex, m.age, m.studyDate,
+      m.studyTime, m.description, m.accession, m.referring, m.modality, ts, m.visitType, m.clinicalHistory,
+      opts.modifiedAt ?? ts
     )
   }
 
   /** Corrects patient / study details (stored in this app only – the DICOM files are not changed). */
-  updateStudyDetails(id: number, m: Partial<ManualStudyInput>): void {
+  updateStudyDetails(id: number, m: Partial<ManualStudyInput>, modifiedAt: string = now()): void {
     const cols: [keyof ManualStudyInput, string][] = [
       ['patientName', 'patient_name'],
       ['patientId', 'patient_id'],
@@ -509,10 +676,15 @@ export class Db {
       ['visitType', 'visit_type'],
       ['clinicalHistory', 'clinical_history']
     ]
+    let changed = false
     for (const [key, col] of cols) {
       const v = m[key]
-      if (typeof v === 'string') this.run(`UPDATE studies SET ${col} = ? WHERE id = ?`, v, id)
+      if (typeof v === 'string') {
+        this.run(`UPDATE studies SET ${col} = ? WHERE id = ?`, v, id)
+        changed = true
+      }
     }
+    if (changed) this.run('UPDATE studies SET modified_at = ? WHERE id = ?', modifiedAt, id)
   }
 
   /** A hand-made case (no images yet) with this accession number, for attaching imported images. */
@@ -655,7 +827,8 @@ export class Db {
       reportId: num(r.report_id),
       status: str(r.status) as ReportStatus,
       html: str(r.html),
-      savedAt: str(r.saved_at)
+      savedAt: str(r.saved_at),
+      note: str(r.note)
     }))
   }
 
@@ -679,8 +852,8 @@ export class Db {
       )
     } else {
       id = this.run(
-        'INSERT INTO templates (name, modality, html, mine, updated_at) VALUES (?,?,?,?,?)',
-        t.name, t.modality, t.html, t.mine ? 1 : 0, ts
+        'INSERT INTO templates (sync_id, name, modality, html, mine, updated_at) VALUES (?,?,?,?,?,?)',
+        randomUUID(), t.name, t.modality, t.html, t.mine ? 1 : 0, ts
       )
     }
     return mapTemplate(this.get('SELECT * FROM templates WHERE id = ?', id) as Row)
@@ -705,9 +878,9 @@ export class Db {
   saveMacro(m: { id?: number; code: string; text: string }): Macro {
     let id = m.id
     if (id) {
-      this.run('UPDATE macros SET code = ?, text = ? WHERE id = ?', m.code, m.text, id)
+      this.run('UPDATE macros SET code = ?, text = ?, updated_at = ? WHERE id = ?', m.code, m.text, now(), id)
     } else {
-      id = this.run('INSERT INTO macros (code, text) VALUES (?, ?)', m.code, m.text)
+      id = this.run('INSERT INTO macros (sync_id, code, text, updated_at) VALUES (?, ?, ?, ?)', randomUUID(), m.code, m.text, now())
     }
     const r = this.get('SELECT * FROM macros WHERE id = ?', id) as Row
     return { id: num(r.id), code: str(r.code), text: str(r.text) }
@@ -730,11 +903,291 @@ export class Db {
   }
 
   saveSettings(s: Settings): Settings {
+    const before = JSON.stringify(syncSettingsOf(this.getSettings()))
     const merged = { ...DEFAULT_SETTINGS, ...s }
     this.run(
       "INSERT INTO settings (key, value) VALUES ('app', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       JSON.stringify(merged)
     )
+    if (JSON.stringify(syncSettingsOf(merged)) !== before) {
+      this.run('UPDATE sync_state SET rev = rev + 1, settings_rev = rev + 1 WHERE id = 1')
+    }
     return merged
+  }
+
+  /** Small JSON values stored next to the settings (phone link configuration …). */
+  getKv<T>(key: string): T | null {
+    const r = this.get('SELECT value FROM settings WHERE key = ?', key)
+    if (!r) return null
+    try {
+      return JSON.parse(str(r.value)) as T
+    } catch {
+      return null
+    }
+  }
+
+  setKv(key: string, value: unknown): void {
+    this.run(
+      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      key,
+      JSON.stringify(value)
+    )
+  }
+
+  // ---------------------------------------------------------------- paired phones
+
+  listDevices(): (PhoneDevice & { key: string })[] {
+    return this.all('SELECT * FROM devices ORDER BY created_at').map((r) => ({
+      id: str(r.id),
+      name: str(r.name),
+      key: str(r.key),
+      createdAt: str(r.created_at),
+      lastSeen: r.last_seen == null ? null : str(r.last_seen),
+      lastIp: r.last_ip == null ? null : str(r.last_ip)
+    }))
+  }
+
+  addDevice(d: { id: string; name: string; key: string }): void {
+    this.run(
+      `INSERT INTO devices (id, name, key, created_at) VALUES (?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name, key = excluded.key`,
+      d.id, d.name, d.key, now()
+    )
+  }
+
+  removeDevice(id: string): void {
+    this.run('DELETE FROM devices WHERE id = ?', id)
+  }
+
+  touchDevice(id: string, ip: string): void {
+    this.run('UPDATE devices SET last_seen = ?, last_ip = ? WHERE id = ?', now(), ip, id)
+  }
+
+  // ---------------------------------------------------------------- phone sync
+
+  syncRev(): number {
+    return num((this.get('SELECT rev FROM sync_state WHERE id = 1') as Row | undefined)?.rev)
+  }
+
+  /**
+   * Cases the phone keeps: everything not yet signed off, plus anything from (or touched in) the
+   * last 30 days, plus older studies of those patients (for "previous reports").
+   */
+  private phoneScope(days = 30): { listed: Set<string>; all: string[] } {
+    const cutoff = new Date(Date.now() - days * 86400000)
+    const cutoffIso = cutoff.toISOString()
+    const cutoffDate = `${cutoff.getFullYear()}${String(cutoff.getMonth() + 1).padStart(2, '0')}${String(cutoff.getDate()).padStart(2, '0')}`
+    const listedRows = this.all(
+      `SELECT s.sync_id, s.patient_id FROM studies s LEFT JOIN reports r ON r.study_id = s.id
+       WHERE s.report_status != 'FINAL' OR s.study_date >= ? OR s.imported_at >= ?
+          OR COALESCE(r.updated_at, '') >= ? OR s.modified_at >= ?`,
+      cutoffDate, cutoffIso, cutoffIso, cutoffIso
+    )
+    const listed = new Set(listedRows.map((r) => str(r.sync_id)))
+    const pids = [...new Set(listedRows.map((r) => str(r.patient_id).trim()).filter(Boolean))]
+    const all = [...listed]
+    if (pids.length) {
+      for (const r of this.all(
+        'SELECT sync_id FROM studies WHERE TRIM(patient_id) IN (SELECT value FROM json_each(?))',
+        JSON.stringify(pids)
+      )) {
+        const id = str(r.sync_id)
+        if (!listed.has(id)) all.push(id)
+      }
+    }
+    return { listed, all }
+  }
+
+  syncPull(req: PullRequest): Omit<PullResponse, 'pcId' | 'pcName'> {
+    const rev = this.syncRev()
+    const since = req.since > rev ? 0 : Math.max(0, Math.floor(req.since))
+    const { listed, all } = this.phoneScope()
+    const scopeJson = JSON.stringify(all)
+    const haveJson = JSON.stringify(Array.isArray(req.have) ? req.have.filter((x) => typeof x === 'string') : [])
+    const studies: SyncStudy[] = this.all(
+      `SELECT s.* FROM studies s
+       WHERE s.sync_id IN (SELECT value FROM json_each(?))
+         AND (s.rev > ? OR s.sync_id NOT IN (SELECT value FROM json_each(?)))`,
+      scopeJson, since, haveJson
+    ).map((r) => ({ ...mapSyncStudy(r), listed: listed.has(str(r.sync_id)) }))
+    const reports: SyncReport[] = this.all(
+      `SELECT r.*, s.sync_id AS study_sync_id FROM reports r JOIN studies s ON s.id = r.study_id
+       WHERE s.sync_id IN (SELECT value FROM json_each(?))
+         AND (r.rev > ? OR s.sync_id NOT IN (SELECT value FROM json_each(?)))`,
+      scopeJson, since, haveJson
+    ).map(mapSyncReport)
+    const templates: SyncTemplate[] = this.all('SELECT * FROM templates WHERE rev > ?', since).map((r) => ({
+      syncId: str(r.sync_id),
+      name: str(r.name),
+      modality: str(r.modality),
+      html: str(r.html),
+      mine: num(r.mine) === 1,
+      updatedAt: str(r.updated_at),
+      rev: num(r.rev)
+    }))
+    const macros: SyncMacro[] = this.all('SELECT * FROM macros WHERE rev > ?', since).map((r) => ({
+      syncId: str(r.sync_id),
+      code: str(r.code),
+      text: str(r.text),
+      updatedAt: str(r.updated_at),
+      rev: num(r.rev)
+    }))
+    const deleted = { studies: [] as string[], templates: [] as string[], macros: [] as string[] }
+    if (since > 0) {
+      for (const t of this.all('SELECT kind, sync_id FROM tombstones WHERE rev > ?', since)) {
+        const k = str(t.kind)
+        if (k === 'study') deleted.studies.push(str(t.sync_id))
+        else if (k === 'template') deleted.templates.push(str(t.sync_id))
+        else if (k === 'macro') deleted.macros.push(str(t.sync_id))
+      }
+    }
+    const settingsRev = num((this.get('SELECT settings_rev FROM sync_state WHERE id = 1') as Row | undefined)?.settings_rev)
+    const settings = since === 0 || settingsRev > since ? syncSettingsOf(this.getSettings()) : null
+    return { rev, studies, reports, templates, macros, deleted, scope: all, settings }
+  }
+
+  /** Applies one case created or edited on the phone (newest edit wins). */
+  applyPushStudy(p: PushStudy, fields: Partial<ManualStudyInput>): PushResult {
+    const row = this.get('SELECT id, rev, modified_at FROM studies WHERE sync_id = ?', p.syncId)
+    const editedAt = saneTime(p.modifiedAt)
+    if (!row) {
+      if (!p.isNew) return { kind: 'study', id: p.syncId, outcome: 'missing', message: 'This case was deleted on the PC.' }
+      if (!fields.patientName) return { kind: 'study', id: p.syncId, outcome: 'rejected', message: 'Patient name is required.' }
+      const full: ManualStudyInput = {
+        patientName: '', patientId: '', accession: '', sex: '', age: '', birthDate: '', description: '', modality: 'CT',
+        studyDate: '', studyTime: '', referring: '', visitType: '', clinicalHistory: '', ...fields
+      }
+      this.createManualStudy(full, { syncId: p.syncId, modifiedAt: editedAt })
+      return { kind: 'study', id: p.syncId, outcome: 'applied' }
+    }
+    const pcEdited = str(row.modified_at)
+    if (num(row.rev) > p.baseRev && pcEdited && pcEdited > editedAt) {
+      return { kind: 'study', id: p.syncId, outcome: 'kept-pc', message: 'The details were changed later on the PC.' }
+    }
+    this.updateStudyDetails(num(row.id), fields, editedAt)
+    return { kind: 'study', id: p.syncId, outcome: 'applied' }
+  }
+
+  /** Applies a report edited on the phone. Signed-off reports are never changed from the phone. */
+  applyPushReport(p: PushReport, html: string, deviceName: string): PushResult & { studyId?: number } {
+    const st = this.get('SELECT id FROM studies WHERE sync_id = ?', p.studySyncId)
+    if (!st) return { kind: 'report', id: p.studySyncId, outcome: 'missing', message: 'This case was deleted on the PC.' }
+    const studyId = num(st.id)
+    const curRow = this.get('SELECT * FROM reports WHERE study_id = ?', studyId)
+    const cur = curRow ? mapReport(curRow) : null
+    const editedAt = saneTime(p.updatedAt)
+    const keepInHistory = (note: string) => {
+      if (cur && html !== cur.html) {
+        this.run(
+          'INSERT INTO report_versions (report_id, status, html, saved_at, note) VALUES (?,?,?,?,?)',
+          cur.id, p.status, html, editedAt, note
+        )
+      }
+    }
+    if (cur?.status === 'FINAL') {
+      keepInHistory(`From ${deviceName} – not applied, the report was already signed off`)
+      return { kind: 'report', id: p.studySyncId, outcome: 'rejected', studyId, message: 'Already signed off on the PC; the phone version is kept in History.' }
+    }
+    if (cur && num(curRow?.rev) > p.baseRev && cur.updatedAt > editedAt) {
+      keepInHistory(`From ${deviceName} – older than the PC version`)
+      return { kind: 'report', id: p.studySyncId, outcome: 'kept-pc', studyId, message: 'The PC version was newer; the phone version is kept in History.' }
+    }
+    this.saveReportFrom(studyId, p, html, editedAt, `Saved on ${deviceName}`)
+    return { kind: 'report', id: p.studySyncId, outcome: 'applied', studyId }
+  }
+
+  private saveReportFrom(studyId: number, p: PushReport, html: string, ts: string, note: string): void {
+    const existing = this.get('SELECT id FROM reports WHERE study_id = ?', studyId)
+    let reportId: number
+    if (existing) {
+      reportId = num(existing.id)
+      this.run(
+        `UPDATE reports SET status = ?, html = ?, text = ?, modality = ?, procedure = ?, radiologist = ?,
+           template_name = ?, updated_at = ?, signed_at = NULL WHERE id = ?`,
+        p.status, html, p.text, p.modality, p.procedure, p.radiologist, p.templateName, ts, reportId
+      )
+    } else {
+      reportId = this.run(
+        `INSERT INTO reports (study_id, status, html, text, modality, procedure, radiologist, template_name,
+           created_at, updated_at, signed_at) VALUES (?,?,?,?,?,?,?,?,?,?,NULL)`,
+        studyId, p.status, html, p.text, p.modality, p.procedure, p.radiologist, p.templateName, ts, ts
+      )
+    }
+    this.run(
+      'INSERT INTO report_versions (report_id, status, html, saved_at, note) VALUES (?,?,?,?,?)',
+      reportId, p.status, html, ts, note
+    )
+    this.run('UPDATE studies SET report_status = ? WHERE id = ?', p.status, studyId)
+  }
+
+  applyPushTemplate(p: PushTemplate): PushResult {
+    const row = this.get('SELECT id, rev, updated_at FROM templates WHERE sync_id = ?', p.syncId)
+    const editedAt = saneTime(p.updatedAt)
+    const pcNewer = row ? num(row.rev) > p.baseRev && str(row.updated_at) > editedAt : false
+    if (p.deleted) {
+      if (!row) return { kind: 'template', id: p.syncId, outcome: 'applied' }
+      if (pcNewer) return { kind: 'template', id: p.syncId, outcome: 'kept-pc', message: 'Changed later on the PC.' }
+      this.run('DELETE FROM templates WHERE id = ?', num(row.id))
+      return { kind: 'template', id: p.syncId, outcome: 'applied' }
+    }
+    if (!row) {
+      const tomb = this.get("SELECT deleted_at FROM tombstones WHERE kind = 'template' AND sync_id = ?", p.syncId)
+      if (tomb && p.baseRev > 0 && str(tomb.deleted_at) > editedAt) {
+        return { kind: 'template', id: p.syncId, outcome: 'kept-pc', message: 'Deleted later on the PC.' }
+      }
+      this.run(
+        'INSERT INTO templates (sync_id, name, modality, html, mine, updated_at) VALUES (?,?,?,?,?,?)',
+        p.syncId, p.name, p.modality, p.html, p.mine ? 1 : 0, editedAt
+      )
+      return { kind: 'template', id: p.syncId, outcome: 'applied' }
+    }
+    if (pcNewer) return { kind: 'template', id: p.syncId, outcome: 'kept-pc', message: 'Changed later on the PC.' }
+    this.run(
+      'UPDATE templates SET name = ?, modality = ?, html = ?, mine = ?, updated_at = ? WHERE id = ?',
+      p.name, p.modality, p.html, p.mine ? 1 : 0, editedAt, num(row.id)
+    )
+    return { kind: 'template', id: p.syncId, outcome: 'applied' }
+  }
+
+  applyPushMacro(p: PushMacro): PushResult {
+    const row = this.get('SELECT id, rev, updated_at FROM macros WHERE sync_id = ?', p.syncId)
+    const editedAt = saneTime(p.updatedAt)
+    const pcNewer = row ? num(row.rev) > p.baseRev && str(row.updated_at) > editedAt : false
+    if (p.deleted) {
+      if (!row) return { kind: 'macro', id: p.syncId, outcome: 'applied' }
+      if (pcNewer) return { kind: 'macro', id: p.syncId, outcome: 'kept-pc', message: 'Changed later on the PC.' }
+      this.run('DELETE FROM macros WHERE id = ?', num(row.id))
+      return { kind: 'macro', id: p.syncId, outcome: 'applied' }
+    }
+    // Another macro already uses this code: keep one macro per code (newest text wins).
+    const clash = this.get('SELECT id, sync_id, updated_at FROM macros WHERE code = ? COLLATE NOCASE AND sync_id != ?', p.code, p.syncId)
+    if (clash) {
+      const phoneNewer = editedAt > str(clash.updated_at)
+      if (phoneNewer) this.run('UPDATE macros SET text = ?, updated_at = ? WHERE id = ?', p.text, editedAt, num(clash.id))
+      if (row) this.run('DELETE FROM macros WHERE id = ?', num(row.id))
+      return {
+        kind: 'macro',
+        id: p.syncId,
+        outcome: phoneNewer ? 'applied' : 'kept-pc',
+        replacedBy: str(clash.sync_id),
+        message: `Macro .${p.code} already existed; merged.`
+      }
+    }
+    if (!row) {
+      const tomb = this.get("SELECT deleted_at FROM tombstones WHERE kind = 'macro' AND sync_id = ?", p.syncId)
+      if (tomb && p.baseRev > 0 && str(tomb.deleted_at) > editedAt) {
+        return { kind: 'macro', id: p.syncId, outcome: 'kept-pc', message: 'Deleted later on the PC.' }
+      }
+      this.run('INSERT INTO macros (sync_id, code, text, updated_at) VALUES (?,?,?,?)', p.syncId, p.code, p.text, editedAt)
+      return { kind: 'macro', id: p.syncId, outcome: 'applied' }
+    }
+    if (pcNewer) return { kind: 'macro', id: p.syncId, outcome: 'kept-pc', message: 'Changed later on the PC.' }
+    this.run('UPDATE macros SET code = ?, text = ?, updated_at = ? WHERE id = ?', p.code, p.text, editedAt, num(row.id))
+    return { kind: 'macro', id: p.syncId, outcome: 'applied' }
+  }
+
+  studyIdForSync(syncId: string): number | null {
+    const r = this.get('SELECT id FROM studies WHERE sync_id = ?', syncId)
+    return r ? num(r.id) : null
   }
 }

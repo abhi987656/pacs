@@ -10,3 +10,4 @@ test-data/
 DICOMDIR
 src/renderer/public/wasm/
 __pycache__/
+out-mobile

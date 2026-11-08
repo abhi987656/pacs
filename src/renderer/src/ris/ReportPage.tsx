@@ -6,6 +6,7 @@ import {
   ChevronUp,
   FileDown,
   FileText,
+  FileType2,
   History,
   Image as ImageIcon,
   Info,
@@ -260,6 +261,29 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
     })
   })
 
+  // Report edited on the phone app and synced while this page is open.
+  useEvent(api.onReportsChanged, (ids: number[]) => {
+    if (!ids.includes(studyId)) return
+    void api.getReport(studyId).then((rep) => {
+      if (!rep) return
+      if (dirtyRef.current) {
+        ui.toast('This report was also changed on your phone. The phone version is in History (clock icon).', 'info')
+        return
+      }
+      loadingRef.current = true
+      setReport(rep)
+      setStatus(rep.status)
+      setModality(rep.modality || modality)
+      setProcedure(rep.procedure || procedure)
+      setTemplateName(rep.templateName)
+      editor.commands.setContent(rep.html, { emitUpdate: false })
+      editor.setEditable(rep.status !== 'FINAL', false)
+      setDirty(false)
+      loadingRef.current = false
+      ui.toast('Report updated from your phone', 'info')
+    })
+  })
+
   // Key images sent from the viewer.
   useEvent(api.onKeyImage, (img: { dataUrl: string; caption: string }) => {
     if (readOnly) {
@@ -410,6 +434,15 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
   const print = async () => {
     if (dirty && !readOnly) await save(draftStatus(), { silent: true })
     await api.printReport(studyId)
+  }
+  const exportAs = async (kind: 'docx' | 'txt') => {
+    if (dirty && !readOnly) await save(draftStatus(), { silent: true })
+    try {
+      const file = await api.exportReport(studyId, kind)
+      if (file) ui.toast(`${kind === 'docx' ? 'Word document' : 'Text file'} saved: ${file}`, 'success')
+    } catch (e) {
+      ui.toast(`Could not export: ${(e as Error).message}`, 'error')
+    }
   }
 
   // ------------------------------------------------------------ derived
@@ -784,6 +817,12 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
             <button className="icon-btn big" title="Save as PDF" onClick={() => void exportPdf()}>
               <FileDown size={18} />
             </button>
+            <button className="icon-btn big" title="Save as Word document (.docx)" onClick={() => void exportAs('docx')}>
+              <FileType2 size={18} />
+            </button>
+            <button className="icon-btn big" title="Save as text file (.txt)" onClick={() => void exportAs('txt')}>
+              <FileText size={18} />
+            </button>
             <button className="btn btn-red" onClick={props.onBack}>
               Back
             </button>
@@ -900,6 +939,7 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
                 <li key={v.id} className={versionPreview?.id === v.id ? 'active' : ''} onClick={() => setVersionPreview(v)}>
                   <b>{formatIsoDateTime(v.savedAt)}</b>
                   <span className={`badge st-${v.status}`}>{STATUS_LABEL[v.status]}</span>
+                  {v.note && <span className="history-note">{v.note}</span>}
                 </li>
               ))}
             </ul>

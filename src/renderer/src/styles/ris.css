@@ -1143,3 +1143,83 @@ table.grid .muted {
 .modal-note {
   max-width: 60%;
 }
+
+/* ================================================= phone app (settings) */
+.phone-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #2c2c31);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.phone-devices {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.phone-device {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #2c2c31);
+  border-radius: 6px;
+}
+.phone-device-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.phone-help {
+  margin-top: 10px;
+}
+.phone-help summary {
+  cursor: pointer;
+  color: var(--muted, #9a9aa3);
+}
+.phone-help ul {
+  margin: 6px 0 0 18px;
+  padding: 0;
+  line-height: 1.5;
+}
+.pair-box {
+  display: grid;
+  grid-template-columns: 270px 1fr;
+  gap: 18px;
+  align-items: start;
+}
+.pair-qr {
+  background: #fff;
+  border-radius: 8px;
+  width: 270px;
+  height: 270px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pair-steps {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.55;
+}
+.pair-manual {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border, #2c2c31);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pair-code {
+  font-size: 20px;
+  letter-spacing: 2px;
+}
+.history-note {
+  display: block;
+  font-size: 11px;
+  color: var(--muted, #9a9aa3);
+}

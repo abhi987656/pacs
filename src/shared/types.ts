@@ -119,6 +119,7 @@ export interface ReportVersion {
   status: ReportStatus
   html: string
   savedAt: string
+  note: string // e.g. "Saved on Phone" for versions that came from the phone app
 }
 
 export interface Template {
@@ -229,6 +230,209 @@ export type SpeechEvent =
   | { type: 'speaking'; speaking: boolean }
   | { type: 'pending'; count: number }
 
+// ------------------------------------------------------------------ phone app sync (PC <-> Android)
+
+/** A case as the phone app sees it. `syncId` never changes (unlike the DICOM study UID). */
+export interface SyncStudy {
+  syncId: string
+  patientName: string
+  patientId: string // CR No
+  accession: string // PG No
+  sex: string
+  age: string // DICOM style "056Y"
+  birthDate: string
+  description: string
+  modalities: string
+  studyDate: string // YYYYMMDD
+  studyTime: string // HHMMSS
+  referring: string
+  visitType: string
+  clinicalHistory: string
+  institution: string
+  numImages: number
+  manual: boolean
+  reportStatus: ReportStatus
+  importedAt: string
+  modifiedAt: string // last time the details were edited ('' = never)
+  rev: number
+  /** true: shown in the phone worklist; false: only kept as a previous study of a listed patient. */
+  listed: boolean
+}
+
+export interface SyncReport {
+  studySyncId: string
+  status: ReportStatus
+  html: string
+  text: string
+  modality: string
+  procedure: string
+  radiologist: string
+  templateName: string
+  updatedAt: string
+  signedAt: string | null
+  rev: number
+}
+
+export interface SyncTemplate {
+  syncId: string
+  name: string
+  modality: string
+  html: string
+  mine: boolean
+  updatedAt: string
+  rev: number
+}
+
+export interface SyncMacro {
+  syncId: string
+  code: string
+  text: string
+  updatedAt: string
+  rev: number
+}
+
+/** PC settings the phone needs (letterhead/signature for exports, dictation corrections). */
+export const SYNC_SETTING_KEYS = [
+  'radiologistName',
+  'radiologistDesignation',
+  'radiologistRegNo',
+  'signatureImage',
+  'institutionName',
+  'institutionAddress',
+  'institutionContact',
+  'logoImage',
+  'showLetterhead',
+  'reportTitle',
+  'footerText',
+  'pageSize',
+  'pageMargin',
+  'pageOrientation',
+  'editorFontFamily',
+  'editorFontSize',
+  'showSignatureBlock',
+  'dictationCommands',
+  'dictationReplacements'
+] as const
+export type SyncSettings = Pick<Settings, (typeof SYNC_SETTING_KEYS)[number]>
+
+export interface PullRequest {
+  since: number // PC revision the phone has already seen (0 = everything)
+  have: string[] // study sync ids stored on the phone
+}
+
+export interface PullResponse {
+  rev: number
+  pcId: string
+  pcName: string
+  studies: SyncStudy[]
+  reports: SyncReport[]
+  templates: SyncTemplate[]
+  macros: SyncMacro[]
+  deleted: { studies: string[]; templates: string[]; macros: string[] }
+  /** Every study the phone should keep; anything else can be removed from the phone. */
+  scope: string[]
+  settings: SyncSettings | null
+}
+
+export interface PushStudy {
+  syncId: string
+  isNew: boolean // a new case created on the phone
+  fields: Partial<ManualStudyInput>
+  modifiedAt: string
+  baseRev: number
+}
+
+export interface PushReport {
+  studySyncId: string
+  status: 'DRAFT' | 'PRELIMINARY' // the phone cannot sign off
+  html: string
+  text: string
+  modality: string
+  procedure: string
+  radiologist: string
+  templateName: string
+  updatedAt: string
+  baseRev: number
+}
+
+export interface PushTemplate {
+  syncId: string
+  name: string
+  modality: string
+  html: string
+  mine: boolean
+  updatedAt: string
+  deleted: boolean
+  baseRev: number
+}
+
+export interface PushMacro {
+  syncId: string
+  code: string
+  text: string
+  updatedAt: string
+  deleted: boolean
+  baseRev: number
+}
+
+export interface PushRequest {
+  studies: PushStudy[]
+  reports: PushReport[]
+  templates: PushTemplate[]
+  macros: PushMacro[]
+}
+
+export type PushOutcome =
+  | 'applied' // the phone's change is now on the PC
+  | 'kept-pc' // both changed; the PC's version was newer and wins (phone version kept in history for reports)
+  | 'rejected' // not allowed (e.g. report already signed off on the PC); phone text kept in history
+  | 'missing' // the case no longer exists on the PC
+
+export interface PushResult {
+  kind: 'study' | 'report' | 'template' | 'macro'
+  id: string
+  outcome: PushOutcome
+  message?: string
+  /** Macro with the same code already on the PC: the phone should use this one instead. */
+  replacedBy?: string
+}
+
+export interface PushResponse {
+  results: PushResult[]
+}
+
+export interface PhoneDevice {
+  id: string
+  name: string
+  createdAt: string
+  lastSeen: string | null
+  lastIp: string | null
+}
+
+export interface PhonePairing {
+  code: string // typed on the phone if the camera is not used
+  uri: string // contents of the QR code
+  expiresAt: string
+}
+
+export interface PhoneLinkStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  addresses: string[]
+  pcName: string
+  pcId: string
+  devices: PhoneDevice[]
+  pairing: PhonePairing | null
+  error: string | null
+  lastSync: { device: string; at: string; summary: string } | null
+}
+
+export type PhoneEvent =
+  | { type: 'status'; status: PhoneLinkStatus }
+  | { type: 'paired'; device: PhoneDevice }
+  | { type: 'synced'; device: string; changedStudies: number[]; summary: string }
+
 export interface ImportProgress {
   running: boolean
   phase: 'scanning' | 'importing' | 'done' | 'cancelled'
@@ -316,6 +520,17 @@ export interface PacsApi {
   listReportVersions(studyId: number): Promise<ReportVersion[]>
   exportReportPdf(studyId: number): Promise<string | null>
   printReport(studyId: number): Promise<boolean>
+  /** Exports the saved report as a Word document or a text file (asks where to save). */
+  exportReport(studyId: number, kind: 'docx' | 'txt'): Promise<string | null>
+  /** Reports changed by the phone app (study ids). */
+  onReportsChanged(cb: (studyIds: number[]) => void): () => void
+  // phone app
+  phoneStatus(): Promise<PhoneLinkStatus>
+  phoneSetEnabled(on: boolean): Promise<PhoneLinkStatus>
+  phoneStartPairing(): Promise<PhoneLinkStatus>
+  phoneCancelPairing(): Promise<PhoneLinkStatus>
+  phoneRemoveDevice(id: string): Promise<PhoneLinkStatus>
+  onPhoneEvent(cb: (e: PhoneEvent) => void): () => void
   // templates & macros
   listTemplates(): Promise<Template[]>
   saveTemplate(t: Omit<Template, 'id' | 'updatedAt'> & { id?: number }): Promise<Template>

@@ -11,6 +11,9 @@ import Image from '@tiptap/extension-image'
 import { Placeholder } from '@tiptap/extensions'
 import type { Macro } from '@shared/types'
 
+/** Only the code and text of a macro are needed (PC and phone macros differ otherwise). */
+export type MacroLike = Pick<Macro, 'code' | 'text'>
+
 export const FONT_FAMILIES = [
   'Times New Roman',
   'Arial',
@@ -29,7 +32,7 @@ export const COLORS = ['#000000', '#c00000', '#e36c09', '#1f4e79', '#0070c0', '#
 export const HIGHLIGHTS = ['#ffff00', '#92d050', '#00b0f0', '#ff99cc', '#ffc000']
 
 /** Expands macros: ".code" + Space/Enter, or "code" + F3 (like Word AutoText). */
-const MacroExpansion = Extension.create<{ getMacros: () => Macro[] }>({
+const MacroExpansion = Extension.create<{ getMacros: () => MacroLike[] }>({
   name: 'macroExpansion',
   addOptions() {
     return { getMacros: () => [] }
@@ -73,7 +76,7 @@ export function insertMacroText(editor: Editor, text: string, range?: { from: nu
   else editor.chain().focus().insertContent(content).run()
 }
 
-export function buildExtensions(opts: { getMacros: () => Macro[]; placeholder: string }) {
+export function buildExtensions(opts: { getMacros: () => MacroLike[]; placeholder: string }) {
   return [
     StarterKit.configure({
       codeBlock: false,

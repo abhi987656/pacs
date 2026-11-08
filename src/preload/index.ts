@@ -61,6 +61,15 @@ const api: PacsApi = {
   listReportVersions: (id) => ipcRenderer.invoke('report:versions', id),
   exportReportPdf: (id) => ipcRenderer.invoke('report:pdf', id),
   printReport: (id) => ipcRenderer.invoke('report:print', id),
+  exportReport: (id, kind) => ipcRenderer.invoke('report:export', id, kind),
+  onReportsChanged: (cb) => on('reports:changed', cb),
+
+  phoneStatus: () => ipcRenderer.invoke('phone:status'),
+  phoneSetEnabled: (onOff) => ipcRenderer.invoke('phone:setEnabled', onOff),
+  phoneStartPairing: () => ipcRenderer.invoke('phone:startPairing'),
+  phoneCancelPairing: () => ipcRenderer.invoke('phone:cancelPairing'),
+  phoneRemoveDevice: (id) => ipcRenderer.invoke('phone:removeDevice', id),
+  onPhoneEvent: (cb) => on('phone:event', cb),
 
   listTemplates: () => ipcRenderer.invoke('templates:list'),
   saveTemplate: (t) => ipcRenderer.invoke('templates:save', t),
