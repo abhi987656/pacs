@@ -54,7 +54,10 @@ export function useMobileEditor(opts: {
     content: opts.content,
     editable: opts.editable,
     editorProps: {
-      attributes: { class: 'report-doc m-doc', spellcheck: 'true', autocapitalize: 'sentences', autocorrect: 'on' }
+      attributes: { class: 'report-doc m-doc', spellcheck: 'true', autocapitalize: 'sentences', autocorrect: 'on' },
+      // Keep the cursor clear of the sticky toolbar (top) and the dictation bubble / action bar (bottom).
+      scrollMargin: { top: 70, bottom: 120, left: 0, right: 0 },
+      scrollThreshold: { top: 70, bottom: 120, left: 0, right: 0 }
     },
     onUpdate: ({ editor }) => opts.onChange?.(editor)
   })
