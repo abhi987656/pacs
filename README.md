@@ -83,13 +83,15 @@ a second monitor if you have one)
 - Layouts 1×1 to 2×3. Double-click a viewport to maximise it.
 - Right-click opens an image tools menu with presets, tools, scale/rotate/flip, reference lines, tile
   formats, linking, cine, MPR, save and copy.
-- Window/level presets on keys 1–9 or the number pad:
+- Window/level presets on the **number pad** 1–9 (0 = original), with Num Lock on or off:
   1 Body Soft Tissue, 2 Body Lung, 3 Body Bone, 4 Body Liver, 5 Head Mid Brain, 6 Head Post Fossa,
   7 Head Blood, 8 Head Bone, 9 CTA MIP. The menu also has Head IAC, Stroke and Subdural.
 - Measurements: length, angle, ellipse/rectangle ROI (mean/SD HU, area), probe (HU), bidirectional and arrow.
 - Text overlay: patient and series details, W/L, slice location and thickness, kVp/mA, TR/TE,
   plus orientation markers.
 - **Compare with prior** (key **C**): current and previous study side by side, with linked scrolling.
+- **Coronal / sagittal in the same tile**: **3** shows the coronal view (3 again = back to the original
+  axial images), **?** shows the sagittal view (? again = coronal). Window/level is kept.
 - **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs.
 - Cine, invert, rotate, flip and magnifier.
 - Compressed DICOM: JPEG, JPEG-LS, JPEG 2000, HTJ2K, RLE and JPEG-XL.
@@ -159,7 +161,8 @@ stops working immediately. Personal PACS must be running on the PC (minimised is
 | Q / U | Lock / unlock reference lines |
 | = / - | Zoom to fit / zoom 1:1 |
 | N / M | Cine / MPR |
-| 1–9, number pad, 0 | Presets, 0 = original |
+| Number pad 1–9, 0 | Window presets, 0 = original (Num Lock on or off) |
+| 3 / ? | Coronal / sagittal of the active tile; again = back (3 → axial, ? → coronal) |
 | Home / End, PgUp / PgDn, arrows | First / last image, ±10, ±1 |
 | F5 | Reset the image |
 | Shift+T / Shift+A / Shift+I | Text overlay / annotations / invert |

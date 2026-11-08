@@ -43,22 +43,21 @@ import { formatAge, formatDicomDate, formatDicomDateTime, formatDicomTime, forma
 import { Modal, useEvent, useUi } from '../common/ui'
 import {
   applyVoi,
-  cache,
   CT_PRESETS,
   DRAG_MODES,
+  ensureVolume,
   getEngine,
   getNatural,
+  getVoi,
   initCornerstone,
   isDragMode,
   onAnnotationCompleted,
-  prefetchSeries,
   setPresentationLink,
   setPrimaryTool,
   setReferenceLines,
   setTextPrompt,
   str,
   TOOL_LABEL,
-  volumeLoader,
   zoomActualSize,
   zoomToFit
 } from './cs'
@@ -193,7 +192,8 @@ const HELP: [string, string][] = [
   ['Q / U', 'Lock / unlock reference lines'],
   ['= / -', 'Zoom to fit / zoom 1:1'],
   ['N / M', 'Cine / MPR (axial, sagittal, coronal)'],
-  ['1 – 9, number pad, 0', 'Window presets, 0 = original'],
+  ['Number pad 1 – 9, 0', 'Window presets, 0 = original (Num Lock on or off)'],
+  ['3 / ?', 'Coronal / sagittal view of the tile; press again to go back (3 = axial, ? = coronal)'],
   ['Home / End, PgUp / PgDn, arrows', 'First / last image, ±10 images, ±1 image'],
   ['F5', 'Reset the image'],
   ['Shift+T / Shift+A / Shift+I', 'Text overlay / annotations / invert'],
@@ -412,7 +412,7 @@ export function ViewerApp() {
     async (index: number, seriesId: number, studyId: number) => {
       if (mpr) exitMpr()
       await ensureImages(seriesId)
-      setSlots((prev) => prev.map((s, i) => (i === index ? { ...s, seriesId, studyId } : s)))
+      setSlots((prev) => prev.map((s, i) => (i === index ? { ...s, kind: 'stack', voi: null, seriesId, studyId } : s)))
       setActive(index)
     },
     [ensureImages, mpr, exitMpr]
@@ -429,7 +429,7 @@ export function ViewerApp() {
     const next: SlotInfo[] = []
     for (let i = 0; i < n; i++) {
       const prev = slotsRef.current[i]
-      if (prev && prev.kind === 'stack') next.push(prev)
+      if (prev && !prev.id.startsWith('mpr-')) next.push(prev)
       else {
         const c = candidates.shift()
         if (c) await ensureImages(c.id)
@@ -522,7 +522,7 @@ export function ViewerApp() {
   // ------------------------------------------------------------ MPR
   const enterMpr = async () => {
     const slot = slots[active]
-    if (!slot?.seriesId || slot.kind !== 'stack' || slot.studyId == null) {
+    if (!slot?.seriesId || slot.id.startsWith('mpr-') || slot.studyId == null) {
       ui.toast('Select a viewport with a series first.', 'info')
       return
     }
@@ -549,16 +549,11 @@ export function ViewerApp() {
       try {
         const imgs = imagesRef.current[mpr.seriesId]
         setMprLoading('Loading images…')
-        await prefetchSeries(imgs.imageIds, (d, t) => !cancelled && setMprLoading(`Loading images ${Math.round((100 * d) / t)}%`))
+        const volumeId = await ensureVolume(mpr.seriesId, imgs.imageIds, (d, t) => {
+          if (!cancelled) setMprLoading(`Loading images ${Math.round((100 * d) / t)}%`)
+        })
         if (cancelled) return
         setMprLoading('Building volume…')
-        const volumeId = `cornerstoneStreamingImageVolume:series-${mpr.seriesId}`
-        let volume = cache.getVolume(volumeId)
-        if (!volume) {
-          volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds: imgs.imageIds })
-          ;(volume as unknown as { load: () => void }).load()
-        }
-        if (cancelled) return
         await setVolumesForViewports(getEngine(), [{ volumeId }], MPR_IDS)
         getEngine().renderViewports(MPR_IDS)
         setMprLoading(null)
@@ -660,7 +655,42 @@ export function ViewerApp() {
     if (vp.type === CoreEnums.ViewportType.STACK) {
       const sv = vp as Types.IStackViewport
       void sv.setImageIdIndex(where === 'first' ? 0 : sv.getImageIds().length - 1)
+    } else {
+      const n = (vp as Types.IVolumeViewport).getNumberOfSlices?.() ?? 0
+      if (n > 0) void csUtils.jumpToSlice(vp.element as HTMLDivElement, { imageIndex: where === 'first' ? 0 : n - 1 })
     }
+  }
+
+  /**
+   * Key 3: the active tile's series as a coronal reformat (3 again = back to the original axial images).
+   * Key ?: sagittal (? again = back to coronal). Window/level is kept.
+   */
+  const reformatActive = async (target: 'coronal' | 'sagittal' | 'stack') => {
+    if (mpr) {
+      ui.toast('Leave the MPR view first (M).', 'info')
+      return
+    }
+    const idx = active
+    const slot = slotsRef.current[idx]
+    if (!slot?.seriesId || slot.studyId == null) {
+      ui.toast('Select a tile with a series first.', 'info')
+      return
+    }
+    let next: SlotInfo['kind'] = target
+    if (target === 'coronal' && slot.kind === 'coronal') next = 'stack'
+    else if (target === 'sagittal' && slot.kind === 'sagittal') next = 'coronal'
+    if (next === slot.kind) return
+    if (next !== 'stack') {
+      const imgs = await ensureImages(slot.seriesId)
+      if (!imgs.reconstructable) {
+        ui.toast('This series cannot be shown in other planes (it needs at least 3 parallel slices of the same size).', 'error')
+        return
+      }
+    }
+    const vp = getEngine().getViewport(slot.id)
+    const voi = vp ? getVoi(vp) : null
+    if (cine) setCine(false)
+    setSlots((prev) => prev.map((s, i) => (i === idx ? { ...s, kind: next, voi: voi ?? s.voi ?? null } : s)))
   }
 
   const toggleCine = () => {
@@ -822,7 +852,7 @@ export function ViewerApp() {
   /** Alt+S / Alt+A: next / previous series of the same study in the active tile. */
   const stepSeries = (dir: 1 | -1) => {
     const slot = slotsRef.current[active]
-    if (!slot || slot.kind !== 'stack' || slot.studyId == null) return
+    if (!slot || slot.id.startsWith('mpr-') || slot.studyId == null) return
     const list = (seriesMap[slot.studyId] ?? []).filter((s) => s.isImage && s.numImages > 0)
     if (!list.length) return
     const i = list.findIndex((s) => s.id === slot.seriesId)
@@ -891,7 +921,18 @@ export function ViewerApp() {
       }
       const k = e.key
       const lower = k.length === 1 ? k.toLowerCase() : k
+      // Number pad 0-9 = window presets. Checked by physical key first, so they work with Num Lock
+      // off too (then the keys would otherwise arrive as End / arrows / PgDn and scroll instead).
       const numpad = /^Numpad(\d)$/.exec(e.code)
+      if (numpad && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault()
+        if (numpad[1] === '0') resetVoi()
+        else {
+          const p = CT_PRESETS.find((x) => x.key === numpad[1])
+          if (p) applyPreset(p.ww, p.wc)
+        }
+        return
+      }
 
       if (k === 'F4') void api.toggleDictation()
       else if (k === 'F5') transform('reset')
@@ -915,14 +956,9 @@ export function ViewerApp() {
       else if (k === 'PageDown') scrollActive(10)
       else if (k === 'Home') jumpActive('first')
       else if (k === 'End') jumpActive('last')
-      else if (numpad || /^[0-9]$/.test(k)) {
-        const d = numpad ? numpad[1] : k
-        if (d === '0') resetVoi()
-        else {
-          const p = CT_PRESETS.find((x) => x.key === d)
-          if (p) applyPreset(p.ww, p.wc)
-        }
-      } else if (k === '=' || k === '+') transform('fit')
+      else if (e.code === 'Digit3' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) void reformatActive('coronal')
+      else if ((k === '?' || e.code === 'Slash') && !e.ctrlKey && !e.altKey && !e.metaKey) void reformatActive('sagittal')
+      else if (k === '=' || k === '+') transform('fit')
       else if (k === '-') transform('actual')
       else if (k === ' ') toggleCine()
       else if (k === 'Delete' || k === 'Backspace') deleteSelectedAnnotations()
@@ -991,8 +1027,8 @@ export function ViewerApp() {
   )
 
   const presetItems: MenuItem[] = [
-    { label: 'Original (from scanner)', hint: '0', onClick: resetVoi },
-    ...CT_PRESETS.map((p) => ({ label: `${p.name}  (${p.ww}/${p.wc})`, hint: p.key, onClick: () => applyPreset(p.ww, p.wc) }))
+    { label: 'Original (from scanner)', hint: 'Num 0', onClick: resetVoi },
+    ...CT_PRESETS.map((p) => ({ label: `${p.name}  (${p.ww}/${p.wc})`, hint: p.key ? `Num ${p.key}` : '', onClick: () => applyPreset(p.ww, p.wc) }))
   ]
   const menuItems: MenuItem[] = [
     { label: 'Window Level', checked: tool === 'WindowLevel', onClick: () => chooseTool('WindowLevel', true) },
@@ -1051,8 +1087,9 @@ export function ViewerApp() {
     'sep',
     {
       label: 'Clear View',
-      disabled: slots[active]?.kind !== 'stack',
-      onClick: () => setSlots((prev) => prev.map((s, i) => (i === active ? { ...s, seriesId: null, studyId: null } : s)))
+      disabled: !!mpr,
+      onClick: () =>
+        setSlots((prev) => prev.map((s, i) => (i === active ? { ...s, kind: 'stack', voi: null, seriesId: null, studyId: null } : s)))
     },
     {
       label: 'Tile Formats',
@@ -1078,7 +1115,16 @@ export function ViewerApp() {
     { label: 'Compare with prior', hint: 'Alt+C', disabled: studies.length < 2, onClick: () => compareStep(1) },
     { label: 'Reset image', hint: 'F5', onClick: () => transform('reset') },
     'sep',
-    { label: mpr ? 'Exit MPR View' : 'MPR View…', hint: 'M', onClick: () => void (mpr ? exitMpr() : enterMpr()) }
+    { label: mpr ? 'Exit MPR View' : 'MPR View…', hint: 'M', onClick: () => void (mpr ? exitMpr() : enterMpr()) },
+    {
+      label: 'Plane',
+      disabled: !!mpr,
+      submenu: [
+        { label: 'Original (axial)', hint: '3', checked: slots[active]?.kind === 'stack', onClick: () => void reformatActive('stack') },
+        { label: 'Coronal', hint: '3', checked: slots[active]?.kind === 'coronal', onClick: () => void reformatActive('coronal') },
+        { label: 'Sagittal', hint: '?', checked: slots[active]?.kind === 'sagittal', onClick: () => void reformatActive('sagittal') }
+      ]
+    }
   ]
 
   const cur = studies[0]
@@ -1209,7 +1255,7 @@ export function ViewerApp() {
         <span className="v-sep" />
         <select
           className="v-select"
-          title="Image presets (keys 1–9 / number pad, 0 = original)"
+          title="Image presets (number pad 1–9, 0 = original)"
           value=""
           onChange={(e) => {
             const v = e.target.value
@@ -1326,7 +1372,7 @@ export function ViewerApp() {
                 showOverlay={overlay}
                 showAnnotations={showAnn}
                 scrollLinked={slots.length > 1 && isLinked(slot.id)}
-                loadingText={slot.kind !== 'stack' ? mprLoading : null}
+                loadingText={slot.id.startsWith('mpr-') ? mprLoading : null}
                 dragMode={isDragMode(tool) ? tool : null}
                 onCycleDragMode={cycleDragMode}
                 onContextMenu={(x, y) => {

@@ -427,4 +427,28 @@ export async function prefetchSeries(imageIds: string[], onProgress: (done: numb
   await Promise.all(Array.from({ length: 8 }, worker))
 }
 
+const volumesInFlight = new Map<string, Promise<string>>()
+
+/**
+ * Builds (once) and caches the 3D volume of a series for MPR / coronal / sagittal views.
+ * Concurrent callers for the same series share one build.
+ */
+export function ensureVolume(seriesId: number, imageIds: string[], onProgress: (done: number, total: number) => void): Promise<string> {
+  const volumeId = `cornerstoneStreamingImageVolume:series-${seriesId}`
+  if (cache.getVolume(volumeId)) return Promise.resolve(volumeId)
+  let job = volumesInFlight.get(volumeId)
+  if (!job) {
+    job = (async () => {
+      await prefetchSeries(imageIds, onProgress)
+      if (!cache.getVolume(volumeId)) {
+        const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
+        ;(volume as unknown as { load: () => void }).load()
+      }
+      return volumeId
+    })().finally(() => volumesInFlight.delete(volumeId))
+    volumesInFlight.set(volumeId, job)
+  }
+  return job
+}
+
 export { Enums, csTools, cache, volumeLoader, metaData }

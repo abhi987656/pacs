@@ -8,6 +8,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import {
   annotationNear,
   applyVoi,
+  ensureVolume,
   getEngine,
   getNatural,
   getVoi,
@@ -27,9 +28,12 @@ export type SlotKind = 'stack' | 'axial' | 'sagittal' | 'coronal'
 
 export interface SlotInfo {
   id: string
+  /** 'stack' = the original images; a plane = reformatted from the series volume (keys 3 / ?, or MPR). */
   kind: SlotKind
   seriesId: number | null
   studyId: number | null
+  /** Window/level to keep when the tile switches between original and reformatted views. */
+  voi?: { ww: number; wc: number } | null
 }
 
 interface OverlayState {
@@ -200,7 +204,8 @@ export function Viewport(p: Props) {
       element,
       defaultOptions: isStack ? { background: [0, 0, 0] } : { background: [0, 0, 0], orientation: ORIENT[kind] }
     })
-    const group = csTools.ToolGroupManager.getToolGroup(isStack ? STACK_TOOLGROUP : MPR_TOOLGROUP)
+    // Tiles of the 3-plane MPR view use the crosshair tools; a single coronal/sagittal tile keeps the normal ones.
+    const group = csTools.ToolGroupManager.getToolGroup(isStack || !id.startsWith('mpr-') ? STACK_TOOLGROUP : MPR_TOOLGROUP)
     group?.addViewport(id, RENDERING_ENGINE_ID)
 
     const refresh = () => {
@@ -278,6 +283,7 @@ export function Viewport(p: Props) {
       .setStack(p.images.imageIds, 0)
       .then(() => {
         if (cancelled) return
+        if (p.slot.voi) applyVoi(vp, p.slot.voi.ww, p.slot.voi.wc)
         vp.render()
         try {
           csTools.utilities.stackPrefetch.enable(element)
@@ -290,6 +296,41 @@ export function Viewport(p: Props) {
       cancelled = true
     }
   }, [id, kind, p.images])
+
+  // Coronal / sagittal view of the series in this tile (keys 3 and ?): load the series volume.
+  const [volLoading, setVolLoading] = useState<string | null>(null)
+  useEffect(() => {
+    if (kind === 'stack' || id.startsWith('mpr-')) return
+    const seriesId = p.slot.seriesId
+    const imgs = p.images
+    if (seriesId == null || !imgs || imgs.imageIds.length === 0) return
+    let cancelled = false
+    void (async () => {
+      try {
+        setVolLoading('Loading images…')
+        const volumeId = await ensureVolume(seriesId, imgs.imageIds, (d, t) => {
+          if (!cancelled) setVolLoading(`Loading images ${Math.round((100 * d) / t)}%`)
+        })
+        if (cancelled) return
+        setVolLoading(`Building ${kind} view…`)
+        const vp = getEngine().getViewport(id) as Types.IVolumeViewport | undefined
+        if (!vp) return
+        await vp.setVolumes([{ volumeId }])
+        if (cancelled) return
+        if (p.slot.voi) applyVoi(vp as unknown as Types.IViewport, p.slot.voi.ww, p.slot.voi.wc)
+        vp.render()
+        setVolLoading(null)
+      } catch (e) {
+        console.error(e)
+        if (!cancelled) setVolLoading(`Could not build the ${kind} view: ${(e as Error).message}`)
+      }
+    })()
+    return () => {
+      cancelled = true
+      setVolLoading(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, kind, p.images, p.slot.seriesId])
 
   // Scrollbar drag.
   const scrollTo = (clientY: number, track: HTMLDivElement) => {
@@ -342,7 +383,7 @@ export function Viewport(p: Props) {
     >
       <div ref={elRef} className="v-element" />
       {!hasImages && <div className="v-empty">Drag a series here, or click a thumbnail above</div>}
-      {p.loadingText && <div className="v-loading">{p.loadingText}</div>}
+      {(p.loadingText || volLoading) && <div className="v-loading">{p.loadingText || volLoading}</div>}
       {kind !== 'stack' && <div className="mpr-label">{kind.toUpperCase()}</div>}
       {p.scrollLinked && hasImages && <div className="link-badge" title="Linked scrolling (S)">LINK</div>}
       {p.showOverlay && hasImages && s && (
