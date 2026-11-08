@@ -67,6 +67,11 @@ function Shell() {
     () =>
       onBackButton(() => {
         const s = stackRef.current
+        const closers = document.querySelectorAll<HTMLElement>('[data-close]')
+        if (closers.length) {
+          closers[closers.length - 1].click()
+          return true
+        }
         if (document.querySelector('.m-backdrop')) {
           ;(document.querySelector('.m-backdrop') as HTMLElement).click()
           return true

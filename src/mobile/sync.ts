@@ -15,7 +15,8 @@ import {
   pairKey,
   seal,
   toB64,
-  unseal
+  unseal,
+  uuid
 } from '@shared/syncCrypto'
 import type { Envelope, PairingInfo, SyncKey } from '@shared/syncCrypto'
 import { Batch, store } from './db'
@@ -179,7 +180,7 @@ export class PairError extends Error {}
 export async function pairWithPc(info: PairingInfo, name: string): Promise<void> {
   const pk = await pairKey(info.code, info.pcId)
   const kp = await newEcdhKeyPair()
-  const deviceId = crypto.randomUUID()
+  const deviceId = uuid()
   const body = await seal(pk, 'pair|req', { deviceId, deviceName: name, pub: await exportPublicKey(kp.publicKey) })
   let hosts = uniq(info.hosts.map((h) => (h.includes(':') ? h : `${h}:${info.port}`)))
   const attempt = async (host: string) => {

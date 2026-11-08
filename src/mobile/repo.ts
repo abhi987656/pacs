@@ -1,11 +1,11 @@
 // Edits made on the phone. Each one is saved locally at once and marked for the next sync.
 
 import type { ManualStudyInput, ReportStatus } from '@shared/types'
+import { uuid } from '@shared/syncCrypto'
 import { Batch, store } from './db'
 import type { DetailField, LocalMacro, LocalReport, LocalStudy, LocalTemplate } from './db'
 
 const nowIso = () => new Date().toISOString()
-const uuid = () => crypto.randomUUID()
 
 /** ManualStudyInput field -> value stored on the local study. */
 export function detailValue(s: LocalStudy, k: DetailField): string {

@@ -69,7 +69,7 @@ export function QrScanner({ onText, onClose }: { onText: (text: string) => boole
       <video ref={videoRef} playsInline muted />
       <div className="m-scanner-frame" />
       <div className="m-scanner-hint">{error ?? 'Point the camera at the QR code on the PC screen'}</div>
-      <button className="m-btn primary m-scanner-close" onClick={onClose}>
+      <button className="m-btn primary m-scanner-close" onClick={onClose} data-close>
         Close
       </button>
     </div>

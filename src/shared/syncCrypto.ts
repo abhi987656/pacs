@@ -45,6 +45,17 @@ export function randomBytes(n: number): Uint8Array<ArrayBuffer> {
   return out
 }
 
+/** RFC 4122 v4 id (crypto.randomUUID is missing on older Android WebViews). */
+export function uuid(): string {
+  const c = globalThis.crypto as unknown as { randomUUID?: () => string }
+  if (typeof c.randomUUID === 'function') return c.randomUUID()
+  const b = randomBytes(16)
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
 // ------------------------------------------------------------------ pairing code
 
 /** No 0/O or 1/I, so the code can be read off the screen and typed without mistakes. */

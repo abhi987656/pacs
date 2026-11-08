@@ -33,7 +33,7 @@ export function Picker<T>({
         <div className="m-topbar-title">
           <div className="m-title">{title}</div>
         </div>
-        <button className="m-icon-btn" onClick={onClose} aria-label="Close">
+        <button className="m-icon-btn" onClick={onClose} aria-label="Close" data-close>
           <X size={22} />
         </button>
       </header>
