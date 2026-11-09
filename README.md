@@ -112,10 +112,9 @@ a second monitor if you have one)
    and copy it to the phone.)
 2. Open the APK. Android asks to allow installing apps from your browser/Files app: allow it.
    If Play Protect warns about an unknown app, choose **More details → Install anyway**.
-3. **Updates:** if the signing key is saved in the repository (see *Development → Android signing
-   key*), a newer APK installs over the old one and keeps your cases and pairing. Otherwise each
-   build has its own key: uninstall the old app first, install the new one and pair again (your
-   reports are safe on the PC; send any unsynced changes before uninstalling).
+3. **Updates:** a newer APK installs over the old one and keeps your cases and pairing.
+   (Builds made before 9 Nov 2026 used temporary keys: if you installed one of those, uninstall it
+   once, then install the new build and pair again. Your reports are safe on the PC.)
 
 ### Pair the phone with the PC (once)
 
@@ -208,20 +207,10 @@ GitHub Actions builds the APK and the Windows installer on every push and publis
 `node scripts/android-icons.cjs` redraws the app icon and splash.
 
 **Android signing key.** Android installs an update only when it is signed with the same key as the
-installed app. Keys are never stored in the repository. To get updates that install over the old
-version, create a key once and save it as two repository secrets
-(GitHub → Settings → Secrets and variables → Actions → New repository secret):
-
-```bash
-keytool -genkeypair -keystore personalpacs.jks -alias personalpacs -keyalg RSA -keysize 3072 -validity 18250
-base64 -w0 personalpacs.jks > personalpacs.jks.b64
-```
-
-- `ANDROID_KEYSTORE_BASE64`: the contents of `personalpacs.jks.b64`
-- `ANDROID_KEYSTORE_PASSWORD`: the password you chose (use the same one for the key)
-
-Keep `personalpacs.jks` and its password somewhere safe: a lost key means the next build must be
-installed fresh (uninstall first). Without the secrets, every build is signed with a one-off key.
+installed app. The permanent release key is kept in this **private** repository
+(`android/app/personalpacs-release.jks`, password in `android/keystore.properties`), so every build
+installs over the previous one. Keep the repository private: anyone with the key could sign an
+"update" for the app. If the repository ever becomes public, move the key out first.
 
 Test data: `scripts/make_test_data.py` generates synthetic, anonymous CT/MR studies. These include a
 prior study, compressed series and a CD layout with DICOMDIR.

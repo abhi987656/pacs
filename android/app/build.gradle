@@ -17,24 +17,31 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    // Release signing key from the environment (CI: repository secrets, see the workflow).
-    // Without it, builds fall back to the debug key (fine for testing on your own phone).
+    // One permanent release key, kept in this private repository (android/keystore.properties
+    // + app/personalpacs-release.jks), so every build installs as an update over the previous one.
     signingConfigs {
         release {
-            def ks = System.getenv("ANDROID_KEYSTORE_FILE")
-            if (ks) {
-                storeFile file(ks)
-                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias System.getenv("ANDROID_KEY_ALIAS") ?: "personalpacs"
-                keyPassword System.getenv("ANDROID_KEY_PASSWORD") ?: System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            def props = new Properties()
+            def f = rootProject.file('keystore.properties')
+            if (f.exists()) {
+                f.withInputStream { props.load(it) }
+                storeFile rootProject.file(props['storeFile'])
+                storeType props['storeType'] ?: 'pkcs12'
+                storePassword props['storePassword']
+                keyAlias props['keyAlias']
+                keyPassword props['keyPassword']
             }
         }
     }
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig System.getenv("ANDROID_KEYSTORE_FILE") ? signingConfigs.release : signingConfigs.debug
+            signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            // Same key, so a debug build can also replace the installed app.
+            signingConfig signingConfigs.release
         }
     }
 }

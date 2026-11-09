@@ -45,35 +45,18 @@ jobs:
       - name: Copy them into the Android project
         run: npx cap sync android
 
-      # Android only installs an update if it is signed with the same key as the installed app.
-      # Save a key once as repository secrets ANDROID_KEYSTORE_BASE64 + ANDROID_KEYSTORE_PASSWORD
-      # (see README) and every build will install over the previous one. Without them, each build
-      # gets a one-off key: uninstall the old app before installing a new build.
-      - name: Signing key
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: |
-          KS="$RUNNER_TEMP/release.jks"
-          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$KS"
-            echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-            echo "Signed with the saved key – installs as an update over the previous version." >> "$GITHUB_STEP_SUMMARY"
-          else
-            PASS=$(openssl rand -hex 16)
-            echo "::add-mask::$PASS"
-            keytool -genkeypair -keystore "$KS" -alias personalpacs -keyalg RSA -keysize 3072 -validity 18250 \
-              -storepass "$PASS" -keypass "$PASS" -dname "CN=Personal PACS" >/dev/null
-            echo "ANDROID_KEYSTORE_PASSWORD=$PASS" >> "$GITHUB_ENV"
-            echo "Signed with a one-off key: uninstall the previous version of the app before installing this one (see README to save a key)." >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "ANDROID_KEYSTORE_FILE=$KS" >> "$GITHUB_ENV"
-
       - name: Build APK
         working-directory: android
         env:
           ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      # Shows which key signed the APK (should be the permanent key from the repository).
+      - name: Check the signature
+        run: |
+          BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$BT/apksigner" verify --print-certs android/app/build/outputs/apk/release/app-release.apk | tee signature.txt
+          echo "Signed with: $(grep -m1 'SHA-256' signature.txt)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Name the APK
         run: |
