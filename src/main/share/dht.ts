@@ -94,3 +94,15 @@ export async function destroyDht(): Promise<void> {
 }
 
 export const directDisabled = (): boolean => process.env.PACS_SHARE_DIRECT === 'off'
+
+/**
+ * Did the node reach the peer-to-peer network? On networks that block UDP the node still starts
+ * (after ~12 s) but knows no other nodes; then nobody can find this PC directly.
+ */
+export function dhtOnline(node: DhtNode): boolean {
+  try {
+    return node.table.toArray().length > 0
+  } catch {
+    return true
+  }
+}

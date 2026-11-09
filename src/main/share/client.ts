@@ -11,7 +11,7 @@ import type { Importer } from '../importer'
 import { sanitizeReportHtml } from '../validate'
 import { deriveShareKeys, open, openJson, sealJson, signRequest } from './crypto'
 import type { ShareKeys } from './crypto'
-import { dhtKeyPair, directDisabled, holdDht } from './dht'
+import { dhtKeyPair, dhtOnline, directDisabled, holdDht } from './dht'
 import type { DhtHold } from './dht'
 import {
   AUTH_HEADER,
@@ -98,9 +98,19 @@ class Peer {
     )
   }
 
-  private async getDht(): Promise<DhtHold> {
-    if (!this.dht) this.dht = await holdDht()
-    return this.dht
+  private dhtPromise: Promise<DhtHold> | null = null
+
+  /** The peer-to-peer node (shared by the direct attempt and the relay lookup). */
+  private getDht(): Promise<DhtHold> {
+    if (!this.dhtPromise) {
+      this.dhtPromise = withTimeout(holdDht(), 30_000, 'Peer-to-peer start').then((h) => {
+        if (this.closed) h.release()
+        else this.dht = h
+        return h
+      })
+      this.dhtPromise.catch(() => (this.dhtPromise = null))
+    }
+    return this.dhtPromise
   }
 
   private async tryDirect(): Promise<boolean> {
@@ -108,6 +118,7 @@ class Peer {
     if (directDisabled() || process.env.PACS_SHARE_DIRECT === 'relay-only' || this.closed) return false
     try {
       const { node } = await this.getDht()
+      if (!dhtOnline(node)) return false // UDP blocked here: only the relay can work
       const kp = await dhtKeyPair(this.keys.seed)
       const socket = node.connect(kp.publicKey)
       socket.on('error', () => {})
@@ -126,6 +137,7 @@ class Peer {
         socket.destroy()
         return false
       }
+      if (this.rpc) this.oldRpcBytes += this.rpc.bytesIn
       this.rpc = new RpcClient(socket)
       return true
     } catch {
@@ -149,6 +161,7 @@ class Peer {
     if (directDisabled()) return null
     try {
       const { node } = await this.getDht()
+      if (!dhtOnline(node)) return null
       const kp = await dhtKeyPair(this.keys.seed)
       const res = await withTimeout<any>(node.mutableGet(kp.publicKey, { latest: true }), 20_000, 'Lookup')
       if (!res?.value) return null
@@ -182,29 +195,18 @@ class Peer {
         } catch (e) {
           lastErr = e as Error
           if (!this.rpc.isClosed) this.rpc.close() // a stuck connection: use the relay
+          this.oldRpcBytes += this.rpc.bytesIn
           this.rpc = null
           void this.retryDirectLater()
         }
       }
       if (this.relayUrl && this.relayOk) {
         try {
-          const res = await this.fetchImpl(this.relayUrl + path, {
-            method,
-            headers: {
-              [AUTH_HEADER]: signRequest(this.keys.mac, method, path),
-              [CLIENT_HEADER]: this.clientId,
-              'Content-Type': 'application/octet-stream'
-            },
-            body: body ? new Uint8Array(body) : undefined,
-            signal: AbortSignal.timeout(180_000)
-          })
-          const buf = Buffer.from(await res.arrayBuffer())
+          const { status, type, buf } = await this.relayRequest(method, path, body)
           // Cloudflare's own errors (tunnel down, 502/530 …) mean the relay is gone, not the share.
-          if (res.status >= 500 || (res.status !== 200 && !(res.headers.get('content-type') ?? '').includes('octet-stream'))) {
-            throw new Error(`Relay error ${res.status}`)
-          }
+          if (status >= 500 || (status !== 200 && !type.includes('octet-stream'))) throw new Error(`Relay error ${status}`)
           this.via = 'relay'
-          return { status: res.status, body: buf }
+          return { status, body: buf }
         } catch (e) {
           lastErr = e as Error
           this.relayOk = false
@@ -219,6 +221,55 @@ class Peer {
       }
     }
     throw lastErr ?? new Error('Connection lost')
+  }
+
+  /** Bytes received over the relay so far (with `rpc.bytesIn`: progress while big responses arrive). */
+  private relayBytesIn = 0
+
+  get bytesIn(): number {
+    return this.relayBytesIn + (this.rpc?.bytesIn ?? 0) + this.oldRpcBytes
+  }
+
+  private oldRpcBytes = 0
+
+  /**
+   * One HTTP request through the relay. It fails only when nothing arrives for a minute (big
+   * responses on slow connections simply take longer); sending a body gets time by its size.
+   */
+  private async relayRequest(method: string, path: string, body?: Buffer): Promise<{ status: number; type: string; buf: Buffer }> {
+    const ctrl = new AbortController()
+    let timer: NodeJS.Timeout | null = null
+    const quiet = (ms: number) => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => ctrl.abort(new Error('Timed out')), ms)
+    }
+    quiet(60_000 + (body ? body.length / 20 : 0)) // at least 20 KB/s for the upload
+    try {
+      const res = await this.fetchImpl(this.relayUrl + path, {
+        method,
+        headers: {
+          [AUTH_HEADER]: signRequest(this.keys.mac, method, path),
+          [CLIENT_HEADER]: this.clientId,
+          'Content-Type': 'application/octet-stream'
+        },
+        body: body ? new Uint8Array(body) : undefined,
+        signal: ctrl.signal
+      })
+      const parts: Buffer[] = []
+      if (res.body) {
+        const reader = res.body.getReader()
+        for (;;) {
+          quiet(60_000)
+          const { done, value } = await reader.read()
+          if (done) break
+          parts.push(Buffer.from(value))
+          this.relayBytesIn += value.length
+        }
+      }
+      return { status: res.status, type: res.headers.get('content-type') ?? '', buf: Buffer.concat(parts) }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   private async retryDirectLater(): Promise<void> {
@@ -432,6 +483,11 @@ export class ShareReceiver {
       }
     }
 
+    // Progress from the bytes actually arriving (a chunk is only complete at its end).
+    const rawStart = job.peer!.bytesIn
+    const shown = () => Math.min(m.totalBytes - 1, Math.max(bytes, job.peer!.bytesIn - rawStart))
+    const ticker = setInterval(() => this.progress(job, shown()), 500)
+
     const worker = async () => {
       while (!fatal && !job.cancelled) {
         const n = queue.shift()
@@ -445,7 +501,7 @@ export class ShareReceiver {
           if (data.length !== Math.min(m.chunkSize, m.totalBytes - n * m.chunkSize)) throw new Error('Wrong size')
           await write(n * m.chunkSize, data)
           bytes += data.length
-          this.progress(job, bytes)
+          this.progress(job, shown())
         } catch (e) {
           if (e instanceof Final || e instanceof Cancelled) {
             fatal = e
@@ -460,7 +516,11 @@ export class ShareReceiver {
         }
       }
     }
-    await Promise.all(Array.from({ length: Math.min(WORKERS, Math.max(1, chunks)) }, worker))
+    try {
+      await Promise.all(Array.from({ length: Math.min(WORKERS, Math.max(1, chunks)) }, worker))
+    } finally {
+      clearInterval(ticker)
+    }
     if (job.cancelled) throw new Cancelled()
     if (fatal) throw fatal
     this.progress(job, bytes, true)

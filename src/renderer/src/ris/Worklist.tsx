@@ -56,6 +56,7 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
   const [progress, setProgress] = useState<ImportProgress | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [loadedOnce, setLoadedOnce] = useState(false)
   const [newCase, setNewCase] = useState(false)
   const [procedures, setProcedures] = useState<string[]>([])
   const [shareFor, setShareFor] = useState<StudyRow | null>(null)
@@ -71,6 +72,7 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
       onOrderChange(list.map((r) => r.id))
     } finally {
       setLoading(false)
+      setLoadedOnce(true)
     }
   }, [filter, onOrderChange])
 
@@ -299,7 +301,7 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
             ))}
           </tbody>
         </table>
-        {rows.length === 0 && !loading && (
+        {rows.length === 0 && !loading && loadedOnce && (
           <div className="empty">
             <FolderOpen size={44} />
             <p>No studies found.</p>

@@ -19,7 +19,7 @@ import { sanitizeReportHtml } from '../validate'
 import { ANON_NAME, anonymizePatches, scrubHtml, scrubText } from './anonymize'
 import { checkRequest, deriveShareKeys, formatShareCode, newShareCode, openJson, seal, sealJson } from './crypto'
 import type { ShareKeys } from './crypto'
-import { dhtKeyPair, directDisabled, holdDht } from './dht'
+import { dhtKeyPair, dhtOnline, directDisabled, holdDht } from './dht'
 import type { DhtHold, DhtKeyPair } from './dht'
 import { CHUNK_SIZE, Pack } from './pack'
 import type { PackFile } from './pack'
@@ -433,6 +433,12 @@ export class ShareHost {
     this.emitShare(l)
     try {
       const { node } = await this.getDht()
+      if (!dhtOnline(node)) {
+        // UDP blocked on this network: the relay has to do. Start afresh on the next try (every 5 min).
+        this.dht?.release()
+        this.dht = null
+        throw new Error('offline')
+      }
       l.kp ??= await dhtKeyPair(l.keys.seed)
       const server = node.createServer((socket: any) => {
         socket.on('error', () => {})

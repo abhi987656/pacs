@@ -6,7 +6,8 @@ A single-user DICOM viewer and radiology reporting workstation for Windows: impo
 other studies from a CD/DVD, USB stick or folder, read them in a PACS-style viewer, and write
 reports in a RIS-style editor with templates, macros and PDF/Word export. Everything runs offline on
 your own PC or laptop. A companion **Android app** lets you write reports on your phone; it syncs
-with the PC over your own Wi-Fi or hotspot.
+with the PC over your own Wi-Fi or hotspot. **Case sharing** sends a whole case (images and report)
+to another Personal PACS user anywhere on the internet, straight from your PC, encrypted.
 
 > **Not a certified medical device.** Use it for personal reporting workflow, teaching and research.
 > Verify findings on your institution's approved diagnostic systems.
@@ -79,6 +80,19 @@ with the PC over your own Wi-Fi or hotspot.
   newest change wins. For reports the older version is kept in the report's **History** on the PC,
   so nothing is lost.
 
+**Case sharing** – send a case to a colleague's Personal PACS, anywhere
+- Select a case and click **Share**. You get a code like `ABCDE-23456` and a ready-to-send message
+  with a link. Send it by WhatsApp or e-mail; your colleague clicks **Receive Case** and pastes it
+  (or just clicks the link). The images, the report and the clinical details arrive in their worklist.
+- **Your PC is the server.** Nothing is uploaded anywhere. It must be on with Personal PACS open
+  (minimised is fine) until the case has been downloaded.
+- Each time you choose: **keep** the patient's name and ID, or **remove** them. Removing them also
+  blanks the birth date, PG No, hospital and doctors in the images, and the patient's name in the report.
+- They can **send their report back** to you. It arrives as a **second opinion** on the case,
+  and in the report's History.
+- The code works for **24 hours** or until you click **Stop sharing**. Watch who downloaded it, and
+  how far, in the **Sharing** button on the worklist or under **Settings → Case sharing**.
+
 **Viewer window** (laid out like a hospital PACS, with mouse and hot keys like Fujifilm Synapse; put it on
 a second monitor if you have one)
 - Study list with prior studies, series thumbnails, and drag-and-drop of series into viewports.
@@ -132,6 +146,35 @@ the phone its own key. The phone finds the PC again by itself when its Wi-Fi add
 Everything travels only over your local network, encrypted (AES-256-GCM, key from an ECDH exchange
 made during pairing). If a phone is lost, remove it under **Settings → Phone app** on the PC; its key
 stops working immediately. Personal PACS must be running on the PC (minimised is fine) for syncing.
+
+## Share a case with a colleague
+
+**Send:** select the case in the worklist (or open it) and click **Share**. Choose whether to keep or
+remove the patient's details and whether they may send their report back, then click **Share**.
+Click **Copy message** and paste it into WhatsApp, e-mail or SMS. Leave Personal PACS open until the
+list shows "downloaded".
+
+**Receive:** click **Receive Case** in the worklist and paste the message, the link or just the
+code. Or click the link: a page opens in the browser with **Open in Personal PACS**. The case appears in
+your worklist marked "from Dr …". The sender's report becomes your draft, so you can read it, change
+it, and click **Send my report to Dr …** in the report's **Sharing** panel.
+
+How it connects, and what is protected:
+- First the two PCs try to connect **directly** (peer-to-peer, through home and office routers). If
+  that's not possible, the case goes through an **encrypted relay**: Cloudflare's free "quick tunnel".
+  The first time, Personal PACS downloads Cloudflare's `cloudflared` tool, once, from Cloudflare's
+  official GitHub releases.
+- Everything is **encrypted end to end** (AES-256-GCM) with a key made from the code. The key never
+  leaves your two computers, so the relay and the peer-to-peer network see only scrambled data.
+  Personal PACS never sends the code over the network. In the link it comes after `#`, a part that
+  browsers don't send to the website.
+- Anyone who has the code can download the case until it stops working, so send it only to the
+  person it's meant for. Stop sharing once they have it.
+- Removing patient details cannot remove names that are **burned into the pictures** (for example
+  some ultrasound images or scanned request forms).
+- With only the code, the receiver finds your PC through the peer-to-peer network. If their network
+  blocks that, send the whole message, which also contains the link.
+- The first time, Windows may ask whether Personal PACS may use the network. Allow it.
 
 ## First steps
 
@@ -243,6 +286,15 @@ python scripts/make_test_data.py test-data
   change (SQLite triggers), so the phone asks for "everything since revision N".
 - **Exports**: `src/shared/reportExport.ts` makes the Word and text files on both the PC and the
   phone. The phone makes PDFs with pdfmake (`src/mobile/reportPdf.ts`); the PC uses Chromium.
+- **Case sharing** (`src/main/share/`): `host.ts` serves a shared case, `client.ts` receives it.
+  The case's files are read as one stream in 4 MB chunks (`pack.ts`), each encrypted on the fly; when
+  anonymizing, identifying DICOM values are overwritten in place with values of the same length
+  (`anonymize.ts`), so the image data and file layout don't change. A 10-character code goes
+  through scrypt to make the encryption key, the request-signing key and a HyperDHT key pair
+  (`crypto.ts`). The direct connection is HyperDHT (Holepunch: public DHT plus UDP hole punching,
+  `dht.ts`, framed requests in `rpc.ts`). The relay is a Cloudflare quick tunnel to a local server
+  (`tunnel.ts`); its address is published, encrypted, in the DHT under the share's key. Links use the
+  `personalpacs://` protocol, registered by the installer.
 - **Phone app**: React + TipTap (sharing the PC's editor code) in a Capacitor Android shell. The
   phone keeps its data in IndexedDB (`src/mobile/db.ts`) and syncs with `src/mobile/sync.ts`. Two
   small native plugins live in `android/app/src/main/java/com/personalpacs/mobile/`: `LanPlugin`
@@ -251,6 +303,6 @@ python scripts/make_test_data.py test-data
 ## Roadmap ideas
 
 - Receive studies straight from scanners/PACS (DICOM C-STORE), and query/retrieve.
-- Anonymised export of teaching cases.
+- Anonymised export of teaching cases to a folder or USB stick.
 - Custom medical vocabulary boosting for dictation.
 - 3D volume rendering and hanging protocols.

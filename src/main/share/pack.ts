@@ -5,7 +5,8 @@ import { open } from 'node:fs/promises'
 import { applyPatches } from './anonymize'
 import type { Patch } from './anonymize'
 
-export const CHUNK_SIZE = 4 * 1024 * 1024
+// 2 MB: big enough for few requests, small enough that progress moves on slow connections.
+export const CHUNK_SIZE = 2 * 1024 * 1024
 
 export interface PackFile {
   path: string

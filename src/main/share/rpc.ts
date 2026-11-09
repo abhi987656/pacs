@@ -96,22 +96,41 @@ export function serveRpc(socket: Duplex, handler: (req: RpcRequest) => Promise<R
   socket.on('error', () => {})
 }
 
-/** Client side of the direct connection. Requests can run in parallel. */
+interface Pending {
+  resolve: (r: RpcResponse) => void
+  reject: (e: Error) => void
+  sentAt: number
+  /** Time allowed for sending the request body (big replies on slow connections). */
+  uploadMs: number
+}
+
+/**
+ * Client side of the direct connection. Requests can run in parallel. A request only times out
+ * when nothing at all arrives for a while: on a slow connection big responses just take longer.
+ */
 export class RpcClient {
   private next = 1
   private closed = false
-  private pending = new Map<number, { resolve: (r: RpcResponse) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>()
+  private pending = new Map<number, Pending>()
+  private lastData = Date.now()
+  private readonly idleTimer: NodeJS.Timeout
+  /** Bytes received so far (for progress while a big response is still arriving). */
+  bytesIn = 0
 
-  constructor(private readonly socket: Duplex) {
+  constructor(
+    private readonly socket: Duplex,
+    private readonly idleMs = 60_000
+  ) {
     const reader = new FrameReader((type, id, payload) => {
       if (type !== 2) return
       const p = this.pending.get(id)
       if (!p) return
       this.pending.delete(id)
-      clearTimeout(p.timer)
       p.resolve({ status: payload.readUInt16BE(0), body: Buffer.from(payload.subarray(2)) })
     })
     socket.on('data', (d: Buffer) => {
+      this.lastData = Date.now()
+      this.bytesIn += d.length
       try {
         reader.push(d)
       } catch {
@@ -120,21 +139,32 @@ export class RpcClient {
     })
     const fail = () => {
       this.closed = true
-      for (const p of this.pending.values()) {
-        clearTimeout(p.timer)
-        p.reject(new Error('Connection closed'))
-      }
+      clearInterval(this.idleTimer)
+      for (const p of this.pending.values()) p.reject(new Error('Connection closed'))
       this.pending.clear()
     }
     socket.on('close', fail)
     socket.on('error', fail)
+    this.idleTimer = setInterval(() => this.checkIdle(), 2_000)
+    this.idleTimer.unref?.()
+  }
+
+  private checkIdle(): void {
+    const now = Date.now()
+    for (const [id, p] of this.pending) {
+      const quietSince = Math.max(this.lastData, p.sentAt + p.uploadMs)
+      if (now - quietSince > this.idleMs) {
+        this.pending.delete(id)
+        p.reject(new Error('Timed out'))
+      }
+    }
   }
 
   get isClosed(): boolean {
     return this.closed || this.socket.destroyed
   }
 
-  request(method: string, path: string, auth: string, client: string, body: Buffer = Buffer.alloc(0), timeoutMs = 120_000): Promise<RpcResponse> {
+  request(method: string, path: string, auth: string, client: string, body: Buffer = Buffer.alloc(0)): Promise<RpcResponse> {
     if (this.isClosed) return Promise.reject(new Error('Connection closed'))
     const id = this.next++
     const header = Buffer.from(JSON.stringify({ m: method, p: path, a: auth, c: client }))
@@ -143,16 +173,14 @@ export class RpcClient {
     header.copy(payload, 2)
     body.copy(payload, 2 + header.length)
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new Error('Timed out'))
-      }, timeoutMs)
-      this.pending.set(id, { resolve, reject, timer })
+      // allow at least 20 KB/s for sending the body
+      this.pending.set(id, { resolve, reject, sentAt: Date.now(), uploadMs: body.length / 20 })
       this.socket.write(frame(1, id, payload))
     })
   }
 
   close(): void {
+    clearInterval(this.idleTimer)
     this.socket.destroy()
   }
 }

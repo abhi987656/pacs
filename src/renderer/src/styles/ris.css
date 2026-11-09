@@ -1472,3 +1472,9 @@ table.grid .muted {
 .modal .btn.btn-red-outline:hover:not(:disabled) {
   background: #fdecea;
 }
+/* green text on the dark Settings cards */
+.card .ok-text,
+.card .share-replies,
+.card .way-chip.way-ready {
+  color: #5cc486;
+}
