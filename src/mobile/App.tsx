@@ -188,7 +188,12 @@ export function App() {
   }, [ready, kick])
 
   if (error) return <div className="m-fatal">Could not open the app's storage: {error}</div>
-  if (!ready) return <div className="m-loading">Personal PACS</div>
+  if (!ready)
+    return (
+      <div className="m-loading">
+        <img src="./logo.png" alt="Personal PACS" />
+      </div>
+    )
   return (
     <UiProvider>
       <Shell />

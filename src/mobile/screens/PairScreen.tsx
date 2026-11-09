@@ -66,7 +66,7 @@ export function PairScreen({ nav, canCancel }: { nav: Nav; canCancel: boolean })
     <Page title="Connect to your PC" onBack={canCancel ? () => nav.back() : undefined}>
       <div className="m-pad">
         <div className="m-hero">
-          <div className="m-hero-title">Personal PACS</div>
+          <img className="m-hero-logo" src="./logo.png" alt="Personal PACS" />
           <div className="m-muted">Report on your phone, synced with Personal PACS on your PC.</div>
         </div>
         <ol className="m-steps">

@@ -14,7 +14,9 @@ export function TemplatesPage({ initialTab, settings }: { initialTab: 'templates
   return (
     <div className="manage-page">
       <header className="topbar">
-        <div className="brand">Personal PACS</div>
+        <div className="brand">
+          Personal <span>PACS</span>
+        </div>
         <div className="topbar-title">Templates &amp; Macros</div>
         <div className="seg">
           <button className={tab === 'templates' ? 'active' : ''} onClick={() => setTab('templates')}>

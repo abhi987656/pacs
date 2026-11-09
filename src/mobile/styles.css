@@ -670,10 +670,18 @@ button:disabled {
   padding: 14px 2px 6px;
 }
 
-.m-hero-title {
-  font-size: 26px;
-  font-weight: 700;
-  margin-bottom: 6px;
+.m-hero-logo {
+  display: block;
+  width: min(72vw, 300px);
+  margin: 0 auto 10px;
+}
+
+.m-hero .m-muted {
+  text-align: center;
+}
+
+.m-loading img {
+  width: min(70vw, 300px);
 }
 
 .m-steps {

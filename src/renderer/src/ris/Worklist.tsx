@@ -142,7 +142,9 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
       onDrop={(e) => void onDrop(e)}
     >
       <header className="topbar">
-        <div className="brand">Personal PACS</div>
+        <div className="brand">
+          Personal <span>PACS</span>
+        </div>
         <div className="topbar-title">Worklist</div>
         <div className="topbar-actions">
           <button

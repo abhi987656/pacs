@@ -14,13 +14,16 @@
   border-right: 1px solid #1c1c1f;
 }
 .rail-logo {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #6fd08f;
   margin-bottom: 8px;
+}
+.rail-logo img {
+  display: block;
+  filter: drop-shadow(0 0 6px rgba(0, 176, 248, 0.35));
 }
 .rail-btn {
   width: 38px;
@@ -67,8 +70,11 @@
 .brand {
   font-weight: 700;
   letter-spacing: 0.5px;
-  color: #74d394;
+  color: #ffffff;
   font-size: 15px;
+}
+.brand span {
+  color: #19c8f5; /* the logo's blue */
 }
 .topbar-title {
   font-size: 15px;

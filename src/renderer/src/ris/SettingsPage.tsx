@@ -56,7 +56,9 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
   return (
     <div className="settings-page">
       <header className="topbar">
-        <div className="brand">Personal PACS</div>
+        <div className="brand">
+          Personal <span>PACS</span>
+        </div>
         <div className="topbar-title">Settings</div>
         <div className="topbar-actions">
           <button className="btn btn-green" onClick={() => void save()}>

@@ -1,5 +1,7 @@
 # Personal PACS
 
+<p align="center"><img src="build/logo.webp" width="320" alt="Personal PACS logo"></p>
+
 A single-user DICOM viewer and radiology reporting workstation for Windows: import CT, MRI and
 other studies from a CD/DVD, USB stick or folder, read them in a PACS-style viewer, and write
 reports in a RIS-style editor with templates, macros and PDF/Word export. Everything runs offline on
@@ -204,7 +206,7 @@ cd android && ./gradlew assembleRelease   # APK (needs JDK 21 and the Android SD
 
 GitHub Actions builds the APK and the Windows installer on every push and publishes them as the
 **android-latest** and **windows-latest** releases (only the newest build is kept).
-`node scripts/android-icons.cjs` redraws the app icon and splash.
+`python scripts/make-icons.py` makes every icon (Windows, Android, app screens) from `build/logo.webp`.
 
 **Android signing key.** Android installs an update only when it is signed with the same key as the
 installed app. The permanent release key is kept in this **private** repository

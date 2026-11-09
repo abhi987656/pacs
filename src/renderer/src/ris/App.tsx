@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ClipboardList, FileText, Settings as SettingsIcon, BookText, Monitor } from 'lucide-react'
+import { ClipboardList, FileText, Settings as SettingsIcon, BookText } from 'lucide-react'
+import logoMark from '../assets/logo-mark.png'
 import type { Settings, StudyFilter } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { useEvent, useUi } from '../common/ui'
@@ -81,7 +82,7 @@ export function App() {
     <div className="app">
       <nav className="rail">
         <div className="rail-logo" title="Personal PACS">
-          <Monitor size={22} />
+          <img src={logoMark} alt="Personal PACS" width={34} height={34} />
         </div>
         {rail.map((r) => (
           <button
