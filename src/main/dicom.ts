@@ -120,7 +120,7 @@ function readUS(ds: dicomParser.DataSet, tag: string): number {
   return ds.uint16(tag) ?? 0
 }
 
-function parseBytes(bytes: Uint8Array): dicomParser.DataSet {
+export function parseBytes(bytes: Uint8Array): dicomParser.DataSet {
   const hasPrefix =
     bytes.length > 132 && bytes[128] === 0x44 && bytes[129] === 0x49 && bytes[130] === 0x43 && bytes[131] === 0x4d
   if (hasPrefix) {
@@ -133,7 +133,7 @@ function parseBytes(bytes: Uint8Array): dicomParser.DataSet {
   throw new Error('not a DICOM file')
 }
 
-async function readBytes(filePath: string, maxBytes: number): Promise<{ bytes: Uint8Array; size: number }> {
+export async function readBytes(filePath: string, maxBytes: number): Promise<{ bytes: Uint8Array; size: number }> {
   const fh = await open(filePath, 'r')
   try {
     const { size } = await fh.stat()

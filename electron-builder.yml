@@ -8,9 +8,19 @@ files:
   - out/**/*
   - package.json
   - '!**/*.map'
+  # only the Windows builds of the peer-to-peer native modules
+  - '!node_modules/{sodium-native,udx-native}/prebuilds/{android,darwin,ios,linux}-*/**'
+  - '!node_modules/{sodium-native,udx-native}/{binding.cc,CMakeLists.txt}'
 asarUnpack:
   # native speech-recognition engine (sherpa-onnx + onnxruntime libraries)
   - node_modules/sherpa-onnx-*/**
+  # native parts of the peer-to-peer network used for case sharing
+  - node_modules/sodium-native/**
+  - node_modules/udx-native/**
+protocols:
+  # personalpacs://share/... links open the app to receive a shared case
+  - name: Personal PACS share link
+    schemes: [personalpacs]
 win:
   icon: build/icon.png
   executableName: PersonalPACS

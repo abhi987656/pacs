@@ -106,3 +106,11 @@ export function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
 }
+
+/** 1536 -> "1.5 KB", 5_300_000 -> "5.1 MB" */
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 MB'
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(n < 10 * 1024 ** 2 ? 1 : 0)} MB`
+  return `${(n / 1024 ** 3).toFixed(2)} GB`
+}

@@ -43,3 +43,8 @@ declare module 'tar-stream' {
   export type EntryStream = Readable
   export function extract(): Extract
 }
+
+declare module 'hyperdht' {
+  const DHT: any // eslint-disable-line @typescript-eslint/no-explicit-any
+  export default DHT
+}

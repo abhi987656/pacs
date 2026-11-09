@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DragEvent } from 'react'
-import { Disc, FilePlus, Files, FileText, FolderOpen, Image as ImageIcon, RefreshCw, Search, Trash, X } from 'lucide-react'
+import { Disc, Download, FilePlus, Files, FileText, FolderOpen, Image as ImageIcon, RefreshCw, Search, Share2, Trash, X } from 'lucide-react'
 import type { ImportProgress, Settings, StudyFilter, StudyRow } from '@shared/types'
 import {
   dicomDateFromDate,
@@ -11,8 +11,9 @@ import {
   formatSex,
   STATUS_LABEL
 } from '@shared/format'
-import { useEvent, useUi } from '../common/ui'
+import { Modal, useEvent, useUi } from '../common/ui'
 import { CaseDialog } from './CaseDialog'
+import { ShareDialog, SharesList, useShares } from './Sharing'
 
 const api = window.api
 
@@ -43,10 +44,11 @@ interface Props {
   onOrderChange: (ids: number[]) => void
   onOpenReport: (studyId: number) => void
   onOpenImages: (studyId: number) => void
+  onReceive: () => void
   settings: Settings
 }
 
-export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, onOpenImages }: Props) {
+export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, onOpenImages, onReceive, settings }: Props) {
   const ui = useUi()
   const [rows, setRows] = useState<StudyRow[]>([])
   const [selected, setSelected] = useState<number | null>(null)
@@ -56,6 +58,10 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
   const [loading, setLoading] = useState(false)
   const [newCase, setNewCase] = useState(false)
   const [procedures, setProcedures] = useState<string[]>([])
+  const [shareFor, setShareFor] = useState<StudyRow | null>(null)
+  const [showShares, setShowShares] = useState(false)
+  const shares = useShares()
+  const sharingNow = shares.filter((s) => s.status === 'active' || s.status === 'preparing').length
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -159,6 +165,14 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
           >
             <FilePlus size={16} /> New Case
           </button>
+          {shares.length > 0 && (
+            <button className="btn btn-outline sharing-chip" title="Cases you are sharing" onClick={() => setShowShares(true)}>
+              <Share2 size={16} /> {sharingNow > 0 ? `Sharing ${sharingNow}` : 'Shared cases'}
+            </button>
+          )}
+          <button className="btn btn-outline" title="Receive a case shared by another Personal PACS user" onClick={onReceive}>
+            <Download size={16} /> Receive Case
+          </button>
           <button className="btn btn-green" onClick={() => void startImport('folder')} disabled={running}>
             <Disc size={16} /> Import CD / Folder
           </button>
@@ -260,7 +274,14 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
                 onDoubleClick={() => onOpenReport(r.id)}
               >
                 <td className={`status-bar st-${r.reportStatus}`}></td>
-                <td className="strong">{r.patientName || '(no name)'}</td>
+                <td className="strong">
+                  {r.patientName || '(no name)'}
+                  {r.sharedFrom && (
+                    <span className="from-badge" title={`Received from ${r.sharedFrom}`}>
+                      from {r.sharedFrom}
+                    </span>
+                  )}
+                </td>
                 <td>{r.patientId}</td>
                 <td>{[formatAge(r.age, r.birthDate, r.studyDate), formatSex(r.sex)].filter(Boolean).join(' / ')}</td>
                 <td>{r.description}</td>
@@ -298,6 +319,9 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
         </button>
         <button className="btn btn-red-outline" disabled={!sel} onClick={() => void deleteStudy()}>
           <Trash size={16} /> Delete
+        </button>
+        <button className="btn" disabled={!sel} onClick={() => sel && setShareFor(sel)} title="Share this case with another Personal PACS user">
+          <Share2 size={16} /> Share
         </button>
         <button className="btn" disabled={!sel} onClick={() => sel && onOpenImages(sel.id)}>
           <ImageIcon size={16} /> Images
@@ -341,6 +365,22 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
         </div>
       )}
       {dragOver && <div className="drop-hint">Drop DICOM files or folders to import</div>}
+      {shareFor && <ShareDialog study={shareFor} senderName={settings.radiologistName} onClose={() => setShareFor(null)} />}
+      {showShares && (
+        <Modal
+          title="Shared cases"
+          onClose={() => setShowShares(false)}
+          footer={
+            <button className="btn" onClick={() => setShowShares(false)}>
+              Close
+            </button>
+          }
+        >
+          <div className="shares-modal">
+            <SharesList shares={shares} />
+          </div>
+        </Modal>
+      )}
       {newCase && (
         <CaseDialog
           procedures={procedures}

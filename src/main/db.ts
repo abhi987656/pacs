@@ -11,10 +11,12 @@ import type {
   PushResult,
   PushStudy,
   PushTemplate,
+  ReceivedShareInfo,
   Report,
   ReportSaveInput,
   ReportStatus,
   ReportVersion,
+  SecondOpinion,
   SeriesRow,
   Settings,
   StudyFilter,
@@ -166,9 +168,12 @@ function mapStudy(r: Row): StudyRow {
     reportUpdatedAt: r.report_updated_at == null ? null : str(r.report_updated_at),
     visitType: str(r.visit_type),
     clinicalHistory: str(r.clinical_history),
-    manual: num(r.manual) === 1
+    manual: num(r.manual) === 1,
+    sharedFrom: r.shared_from == null ? null : str(r.shared_from)
   }
 }
+
+const SHARED_FROM = `(SELECT rs.sender_name FROM received_shares rs WHERE rs.study_id = s.id ORDER BY rs.received_at DESC LIMIT 1) AS shared_from`
 
 function mapSeries(r: Row): SeriesRow {
   return {
@@ -270,6 +275,19 @@ function saneTime(iso: string): string {
   return new Date(t).toISOString()
 }
 
+export interface ShareRow {
+  id: string
+  studyId: number
+  code: string
+  anonymize: boolean
+  allowReply: boolean
+  pseudoId: string
+  createdAt: string
+  expiresAt: string
+  stoppedAt: string | null
+  downloads: number
+}
+
 export interface StudyInsert {
   studyUid: string
   patientId: string
@@ -337,6 +355,52 @@ export class Db {
       this.db.exec('PRAGMA user_version = 2')
     }
     if (v < 3) this.transaction(() => this.migrateV3())
+    if (v < 4) this.transaction(() => this.migrateV4())
+  }
+
+  /** Case sharing with other Personal PACS users (sender and receiver side). */
+  private migrateV4(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS shares (
+        id TEXT PRIMARY KEY,
+        study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+        code TEXT NOT NULL,
+        anonymize INTEGER NOT NULL DEFAULT 0,
+        allow_reply INTEGER NOT NULL DEFAULT 1,
+        pseudo_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        stopped_at TEXT,
+        closed_at TEXT,
+        downloads INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS received_shares (
+        id TEXT PRIMARY KEY,
+        study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+        code TEXT NOT NULL,
+        relay_url TEXT NOT NULL DEFAULT '',
+        sender_name TEXT NOT NULL DEFAULT '',
+        allow_reply INTEGER NOT NULL DEFAULT 0,
+        anonymized INTEGER NOT NULL DEFAULT 0,
+        expires_at TEXT NOT NULL DEFAULT '',
+        received_at TEXT NOT NULL,
+        replied_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_received_study ON received_shares(study_id);
+      CREATE TABLE IF NOT EXISTS second_opinions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+        from_name TEXT NOT NULL DEFAULT '',
+        from_designation TEXT NOT NULL DEFAULT '',
+        reply_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'DRAFT',
+        html TEXT NOT NULL DEFAULT '',
+        text TEXT NOT NULL DEFAULT '',
+        received_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_opinions_study ON second_opinions(study_id);
+    `)
+    this.db.exec('PRAGMA user_version = 4')
   }
 
   /**
@@ -591,7 +655,7 @@ export class Db {
       where.push('r.text LIKE ?')
       params.push(`%${f.reportText.trim()}%`)
     }
-    const sql = `SELECT s.*, r.updated_at AS report_updated_at FROM studies s
+    const sql = `SELECT s.*, r.updated_at AS report_updated_at, ${SHARED_FROM} FROM studies s
       LEFT JOIN reports r ON r.study_id = s.id
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ORDER BY s.study_date DESC, s.study_time DESC, s.id DESC
@@ -602,7 +666,7 @@ export class Db {
 
   getStudy(id: number): StudyRow | null {
     const r = this.get(
-      `SELECT s.*, r.updated_at AS report_updated_at FROM studies s
+      `SELECT s.*, r.updated_at AS report_updated_at, ${SHARED_FROM} FROM studies s
        LEFT JOIN reports r ON r.study_id = s.id WHERE s.id = ?`,
       id
     )
@@ -627,7 +691,7 @@ export class Db {
     const s = this.getStudy(studyId)
     if (!s || !s.patientId) return []
     return this.all(
-      `SELECT s.*, r.updated_at AS report_updated_at FROM studies s
+      `SELECT s.*, r.updated_at AS report_updated_at, ${SHARED_FROM} FROM studies s
        LEFT JOIN reports r ON r.study_id = s.id
        WHERE s.patient_id = ? AND s.id != ?
        ORDER BY s.study_date DESC, s.study_time DESC`,
@@ -932,6 +996,146 @@ export class Db {
       key,
       JSON.stringify(value)
     )
+  }
+
+  // ---------------------------------------------------------------- case sharing
+
+  insertShare(r: { id: string; studyId: number; code: string; anonymize: boolean; allowReply: boolean; pseudoId: string; expiresAt: string }): void {
+    this.run(
+      `INSERT OR REPLACE INTO shares (id, study_id, code, anonymize, allow_reply, pseudo_id, created_at, expires_at)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      r.id, r.studyId, r.code, r.anonymize ? 1 : 0, r.allowReply ? 1 : 0, r.pseudoId, now(), r.expiresAt
+    )
+  }
+
+  /** Shares that are not closed and were made in the last `days` days (downloads may have ended). */
+  listShareRows(days: number): ShareRow[] {
+    const rows = this.all(
+      'SELECT * FROM shares WHERE closed_at IS NULL AND created_at > ? ORDER BY created_at DESC',
+      new Date(Date.now() - days * 86400000).toISOString()
+    )
+    return rows.map((r) => ({
+      id: str(r.id),
+      studyId: num(r.study_id),
+      code: str(r.code),
+      anonymize: num(r.anonymize) === 1,
+      allowReply: num(r.allow_reply) === 1,
+      pseudoId: str(r.pseudo_id),
+      createdAt: str(r.created_at),
+      expiresAt: str(r.expires_at),
+      stoppedAt: r.stopped_at == null ? null : str(r.stopped_at),
+      downloads: num(r.downloads)
+    }))
+  }
+
+  /** Stops downloads (replies are still accepted). */
+  stopShare(id: string): void {
+    this.run('UPDATE shares SET stopped_at = COALESCE(stopped_at, ?) WHERE id = ?', now(), id)
+  }
+
+  /** Ends a share completely (no downloads, no replies). */
+  closeShare(id: string): void {
+    const ts = now()
+    this.run('UPDATE shares SET stopped_at = COALESCE(stopped_at, ?), closed_at = COALESCE(closed_at, ?) WHERE id = ?', ts, ts, id)
+  }
+
+  countShareDownload(id: string): void {
+    this.run('UPDATE shares SET downloads = downloads + 1 WHERE id = ?', id)
+  }
+
+  saveReceivedShare(r: Omit<ReceivedShareInfo, 'receivedAt' | 'repliedAt'> & { code: string; relayUrl: string }): void {
+    this.run(
+      `INSERT INTO received_shares (id, study_id, code, relay_url, sender_name, allow_reply, anonymized, expires_at, received_at)
+       VALUES (?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET study_id = excluded.study_id, relay_url = excluded.relay_url,
+         sender_name = excluded.sender_name, expires_at = excluded.expires_at, received_at = excluded.received_at`,
+      r.id, r.studyId, r.code, r.relayUrl, r.senderName, r.allowReply ? 1 : 0, r.anonymized ? 1 : 0, r.replyUntil, now()
+    )
+  }
+
+  receivedForStudy(studyId: number): (ReceivedShareInfo & { code: string; relayUrl: string }) | null {
+    // Prefer a share that still accepts a report back (the same case may have been received twice).
+    const r = this.get(
+      `SELECT * FROM received_shares WHERE study_id = ?
+       ORDER BY (allow_reply = 1 AND expires_at > ?) DESC, received_at DESC LIMIT 1`,
+      studyId,
+      now()
+    )
+    if (!r) return null
+    return {
+      id: str(r.id),
+      studyId: num(r.study_id),
+      code: str(r.code),
+      relayUrl: str(r.relay_url),
+      senderName: str(r.sender_name),
+      allowReply: num(r.allow_reply) === 1,
+      anonymized: num(r.anonymized) === 1,
+      replyUntil: str(r.expires_at),
+      receivedAt: str(r.received_at),
+      repliedAt: r.replied_at == null ? null : str(r.replied_at)
+    }
+  }
+
+  findReceivedShare(id: string): { studyId: number } | null {
+    const r = this.get('SELECT rs.study_id FROM received_shares rs JOIN studies s ON s.id = rs.study_id WHERE rs.id = ?', id)
+    return r ? { studyId: num(r.study_id) } : null
+  }
+
+  markReplied(id: string, relayUrl?: string): void {
+    this.run('UPDATE received_shares SET replied_at = ? WHERE id = ?', now(), id)
+    if (relayUrl) this.run('UPDATE received_shares SET relay_url = ? WHERE id = ?', relayUrl, id)
+  }
+
+  /** A report sent back by the person a case was shared with. Also kept in the report's History. */
+  addSecondOpinion(
+    studyId: number,
+    o: { replyId: string; fromName: string; fromDesignation: string; status: ReportStatus; html: string; text: string }
+  ): boolean {
+    if (o.replyId && this.get('SELECT 1 AS x FROM second_opinions WHERE reply_id = ?', o.replyId)) return false // sent twice
+    const ts = now()
+    this.run(
+      `INSERT INTO second_opinions (study_id, from_name, from_designation, reply_id, status, html, text, received_at) VALUES (?,?,?,?,?,?,?,?)`,
+      studyId, o.fromName, o.fromDesignation, o.replyId, o.status, o.html, o.text, ts
+    )
+    const rep = this.get('SELECT id FROM reports WHERE study_id = ?', studyId)
+    if (rep) {
+      this.run(
+        'INSERT INTO report_versions (report_id, status, html, saved_at, note) VALUES (?,?,?,?,?)',
+        num(rep.id), o.status, o.html, ts, `Second opinion from ${o.fromName || 'a colleague'}`
+      )
+    }
+    return true
+  }
+
+  listSecondOpinions(studyId: number): SecondOpinion[] {
+    return this.all('SELECT * FROM second_opinions WHERE study_id = ? ORDER BY id DESC', studyId).map((r) => ({
+      id: num(r.id),
+      studyId: num(r.study_id),
+      fromName: str(r.from_name),
+      fromDesignation: str(r.from_designation),
+      status: str(r.status) as ReportStatus,
+      html: str(r.html),
+      text: str(r.text),
+      receivedAt: str(r.received_at)
+    }))
+  }
+
+  countSecondOpinions(studyId: number): number {
+    return num((this.get('SELECT COUNT(*) AS n FROM second_opinions WHERE study_id = ?', studyId) as Row).n)
+  }
+
+  /** Labels the newest saved version (e.g. "Received from …"). */
+  noteLatestVersion(studyId: number, note: string): void {
+    this.run(
+      `UPDATE report_versions SET note = ? WHERE id = (SELECT MAX(v.id) FROM report_versions v JOIN reports r ON r.id = v.report_id WHERE r.study_id = ?)`,
+      note, studyId
+    )
+  }
+
+  /** Adds a version note without changing the report (e.g. "Received from …"). */
+  addReportVersionNote(studyId: number, html: string, status: ReportStatus, note: string): void {
+    const rep = this.get('SELECT id FROM reports WHERE study_id = ?', studyId)
+    if (rep) this.run('INSERT INTO report_versions (report_id, status, html, saved_at, note) VALUES (?,?,?,?,?)', num(rep.id), status, html, now(), note)
   }
 
   // ---------------------------------------------------------------- paired phones

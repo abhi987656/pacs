@@ -4,6 +4,8 @@ import logoMark from '../assets/logo-mark.png'
 import type { Settings, StudyFilter } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { useEvent, useUi } from '../common/ui'
+import { ReceiveCenter } from './Sharing'
+import type { ReceiveCenterHandle } from './Sharing'
 import { Worklist } from './Worklist'
 import { ReportPage } from './ReportPage'
 import type { ReportPageHandle } from './ReportPage'
@@ -25,6 +27,7 @@ export function App() {
   const [studyOrder, setStudyOrder] = useState<number[]>([])
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const reportRef = useRef<ReportPageHandle>(null)
+  const receiveRef = useRef<ReceiveCenterHandle>(null)
 
   useEffect(() => {
     void api.getSettings().then(setSettings)
@@ -62,6 +65,15 @@ export function App() {
 
   useEvent(api.onToggleDictation, () => {
     if (page.name !== 'report') ui.toast('Open a report to dictate (F4).', 'info')
+  })
+
+  // Case sharing: a personalpacs:// link opened the app, and second opinions sent back to us.
+  useEffect(() => {
+    void api.takeShareLink().then((link) => link && receiveRef.current?.open(link))
+  }, [])
+  useEvent(api.onShareLink, (link: string) => receiveRef.current?.open(link))
+  useEvent(api.onShareEvent, (e) => {
+    if (e.type === 'opinion') ui.toast(`${e.fromName} sent their report on ${e.title}. Open the case to read it.`, 'success')
   })
 
   const rail = [
@@ -103,6 +115,7 @@ export function App() {
             onOrderChange={setStudyOrder}
             onOpenReport={(id) => void openReport(id)}
             onOpenImages={(id) => void api.openViewer(id)}
+            onReceive={() => receiveRef.current?.open()}
             settings={settings}
           />
         )}
@@ -122,6 +135,7 @@ export function App() {
         {page.name === 'settings' && <SettingsPage settings={settings} onSaved={setSettings} />}
         {page.name === 'templates' && <TemplatesPage initialTab={page.tab ?? 'templates'} settings={settings} />}
       </div>
+      <ReceiveCenter ref={receiveRef} onOpenCase={(id) => void openReport(id)} />
     </div>
   )
 }

@@ -30,6 +30,7 @@ import { buildExtensions, fillPlaceholders, findNext, insertMacroText, replaceAl
 import { Ribbon } from './Ribbon'
 import { DictationControl } from './DictationControl'
 import { CaseDialog } from './CaseDialog'
+import { ShareDialog, SharingPanel } from './Sharing'
 
 const api = window.api
 const MODALITY_OPTIONS = ['CT', 'MR', 'CR', 'DX', 'US', 'MG', 'PT', 'NM', 'XA', 'RF', 'OT']
@@ -92,6 +93,7 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
   const [clinical, setClinical] = useState('')
   const [autosavedAt, setAutosavedAt] = useState<string | null>(null)
   const [editDetails, setEditDetails] = useState(false)
+  const [sharing, setSharing] = useState(false)
 
   const macrosRef = useRef<Macro[]>([])
   macrosRef.current = macros
@@ -561,6 +563,21 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
               <div className="kv-s muted">Not saved yet</div>
             )}
           </SidePanel>
+          <SidePanel title="Sharing">
+            <SharingPanel
+              study={study}
+              onShare={() => setSharing(true)}
+              saveFirst={async () => (dirtyRef.current && !readOnly ? (await save(draftStatus(), { silent: true })) != null : true)}
+              onInsert={
+                readOnly
+                  ? undefined
+                  : (html) => {
+                      editor.chain().focus().insertContent(html).run()
+                      setDirty(true)
+                    }
+              }
+            />
+          </SidePanel>
           <SidePanel title="Previous Reports">
             {priors.length === 0 && <div className="kv-s muted">No previous studies for this patient ID.</div>}
             {priors.map((p) => (
@@ -829,6 +846,8 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
           </footer>
         </main>
       </div>
+
+      {sharing && <ShareDialog study={study} senderName={settings.radiologistName} onClose={() => setSharing(false)} />}
 
       {editDetails && (
         <CaseDialog

@@ -1,8 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { basename, extname, join } from 'node:path'
+import { basename, extname, join, resolve } from 'node:path'
 import type {
   EditCommand,
   ImportResult,
@@ -23,10 +23,17 @@ import type { DataPaths } from './paths'
 import { buildReportHtml, defaultPdfName, printHtml, renderPdf } from './print'
 import { DICOM_BASE_URL, handleAppScheme, registerAppScheme } from './protocol'
 import { seedIfEmpty } from './seed'
+import { ShareHost } from './share/host'
+import { ShareReceiver } from './share/client'
+import { destroyDht } from './share/dht'
+import { LINK_SCHEME } from './share/protocol'
 import { SpeechService } from './speech'
 import { getSpeechModel } from './speechModels'
 import { buildSeriesImages, sortInstances } from './sortImages'
 import { createMainWindow, createViewerWindow } from './windows'
+
+// Tests run two copies of the app side by side (sender and receiver), each with its own profile.
+if (process.env.PACS_USER_DATA_DIR) app.setPath('userData', process.env.PACS_USER_DATA_DIR)
 
 registerAppScheme()
 
@@ -35,20 +42,58 @@ let db: Db
 let importer: Importer
 let speech: SpeechService
 let phone: PhoneLink
+let shares: ShareHost
+let receiver: ShareReceiver
 let mainWin: BrowserWindow | null = null
 let viewerWin: BrowserWindow | null = null
 let viewerReady = false
 let pendingViewerStudy: number | null = null
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit()
+// personalpacs://share/<code>?r=<relay> links (from the page a shared-case link opens) start or
+// focus the app; the link arrives on the command line.
+const isShareLink = (a: string) => a.toLowerCase().startsWith(`${LINK_SCHEME}://`)
+let pendingLink: string | null = process.argv.find(isShareLink) ?? null
+
+function deliverShareLink(link: string): void {
+  if (mainWin && !mainWin.isDestroyed() && !mainWin.webContents.isLoading()) {
+    mainWin.webContents.send('share:link', link)
+    pendingLink = null
+  } else pendingLink = link
+}
+
+const firstInstance = app.requestSingleInstanceLock()
+if (!firstInstance) {
+  app.quit() // the running copy gets our command line (e.g. a share link) via 'second-instance'
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_e, argv) => {
     if (mainWin) {
       if (mainWin.isMinimized()) mainWin.restore()
       mainWin.focus()
     }
+    const link = argv.find(isShareLink)
+    if (link) deliverShareLink(link)
   })
+  app.on('open-url', (e, url) => {
+    e.preventDefault()
+    if (isShareLink(url)) deliverShareLink(url)
+  })
+}
+
+/** Lets share links open this app (Windows; the installer registers it as well). */
+function registerLinkHandler(): void {
+  if (process.platform !== 'win32' || process.env.PACS_E2E_SAVE_DIR) return
+  try {
+    if (process.defaultApp) {
+      // development: electron.exe <app folder>
+      if (process.argv[1]) app.setAsDefaultProtocolClient(LINK_SCHEME, process.execPath, [resolve(process.argv[1])])
+    } else {
+      // The portable build runs from a temporary folder: register the .exe the user started.
+      const exe = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath
+      app.setAsDefaultProtocolClient(LINK_SCHEME, exe, [])
+    }
+  } catch {
+    /* not important enough to stop the app */
+  }
 }
 
 function broadcast(channel: string, ...args: unknown[]): void {
@@ -322,6 +367,32 @@ function registerIpc(): void {
   ipcMain.handle('phone:cancelPairing', () => phone.cancelPairing())
   ipcMain.handle('phone:removeDevice', (_e, id: unknown) => phone.removeDevice(String(id ?? '')))
 
+  // ---------------- case sharing with other Personal PACS users
+  ipcMain.handle('share:create', (_e, id: unknown, opts: { anonymize?: unknown; allowReply?: unknown }) =>
+    shares.create(asId(id), { anonymize: opts?.anonymize === true, allowReply: opts?.allowReply !== false })
+  )
+  ipcMain.handle('share:list', () => shares.list())
+  ipcMain.handle('share:stop', (_e, id: unknown, close: unknown) => shares.stop(String(id ?? ''), close === true))
+  ipcMain.handle('receive:start', (_e, input: unknown) => receiver.start(String(input ?? '').slice(0, 4000)))
+  ipcMain.handle('receive:cancel', (_e, jobId: unknown) => receiver.cancel(String(jobId ?? '')))
+  ipcMain.handle('share:takeLink', () => {
+    const link = pendingLink
+    pendingLink = null
+    return link
+  })
+  ipcMain.handle('share:received', (_e, id: unknown) => {
+    const r = db.receivedForStudy(asId(id))
+    if (!r) return null
+    const { code: _code, relayUrl: _relay, ...info } = r // eslint-disable-line @typescript-eslint/no-unused-vars
+    return info
+  })
+  ipcMain.handle('share:reply', async (_e, id: unknown) => {
+    const msg = await receiver.reply(asId(id))
+    broadcast('studies:changed')
+    return msg
+  })
+  ipcMain.handle('share:opinions', (_e, id: unknown) => db.listSecondOpinions(asId(id)))
+
   // ---------------- templates & macros
   ipcMain.handle('templates:list', () => db.listTemplates())
   ipcMain.handle('templates:save', (_e, t) => {
@@ -416,6 +487,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
+  if (!firstInstance) return
   // No menu bar: keeps the Alt key free for viewer shortcuts (Alt+C compare, Alt+drag W/L …).
   Menu.setApplicationMenu(null)
   paths = ensureDataPaths()
@@ -435,8 +507,22 @@ app.whenReady().then(() => {
     },
     process.env.PACS_PHONE_PORT ? Number(process.env.PACS_PHONE_PORT) : undefined
   )
+  // Electron's network stack (net.fetch) uses the system's proxy settings, like the browser.
+  const netFetch = ((input: string | URL | Request, init?: RequestInit) => net.fetch(input instanceof URL ? input.href : input, init)) as typeof fetch
+  shares = new ShareHost(db, paths.archiveDir, join(paths.dataDir, 'tools'), (e) => broadcast('share:event', e), netFetch)
+  receiver = new ShareReceiver(
+    db,
+    importer,
+    paths.tmpDir,
+    (p) => broadcast('receive:progress', p),
+    () => broadcast('studies:changed'),
+    netFetch
+  )
   registerIpc()
+  registerLinkHandler()
   void phone.init()
+  void receiver.cleanup()
+  void shares.init()
   mainWin = createMainWindow()
   mainWin.on('closed', () => {
     mainWin = null
@@ -452,6 +538,7 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   speech?.shutdown()
   void phone?.stop()
+  void shares?.shutdown().then(() => destroyDht())
   try {
     db?.close()
   } catch {

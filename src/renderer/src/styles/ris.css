@@ -1229,3 +1229,246 @@ table.grid .muted {
   font-size: 11px;
   color: var(--muted, #9a9aa3);
 }
+
+/* ================================================= case sharing */
+.err-text {
+  color: #d64541;
+}
+.share-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 520px;
+  max-width: 100%;
+}
+.share-study {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+.share-intro {
+  margin: 0;
+  line-height: 1.45;
+}
+.share-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.share-choice-title {
+  font-weight: 600;
+}
+.share-choice .check-line,
+.share-dialog .check-line {
+  align-items: flex-start;
+  line-height: 1.4;
+}
+.share-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.share-card.compact {
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.share-card-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.share-code-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.share-code {
+  font-size: 24px;
+  letter-spacing: 3px;
+  font-weight: 700;
+}
+.share-code-btns {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.share-headline {
+  line-height: 1.4;
+}
+.share-ways {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.way-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+}
+.way-chip.way-ready {
+  color: #2f9b5a;
+  border-color: rgba(47, 155, 90, 0.5);
+  background: rgba(47, 155, 90, 0.08);
+}
+.way-chip.way-starting {
+  color: #b7791f;
+  border-color: rgba(183, 121, 31, 0.45);
+}
+.way-chip.way-unavailable {
+  color: #d64541;
+  border-color: rgba(214, 69, 65, 0.45);
+}
+.share-message {
+  width: 100%;
+  resize: none;
+  font-size: 12px;
+}
+.share-downloads {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.share-downloads li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.share-replies {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #2f9b5a;
+}
+.share-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.shares-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.shares-modal {
+  width: 600px;
+  max-width: 100%;
+}
+.receive-dialog {
+  width: 500px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.receive-dialog textarea {
+  width: 100%;
+  resize: vertical;
+}
+.receive-error {
+  padding: 8px 10px;
+  border: 1px solid rgba(214, 69, 65, 0.4);
+  border-radius: 6px;
+  background: rgba(214, 69, 65, 0.06);
+}
+.receive-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.receive-title {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.receive-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.receive-chip {
+  position: fixed;
+  left: 70px;
+  bottom: 62px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 440px;
+  padding: 8px 12px;
+  background: #17171a;
+  color: #ececef;
+  border: 1px solid #2c2c31;
+  border-radius: 18px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+.receive-chip.done {
+  border-color: var(--green);
+}
+.receive-chip span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.from-badge {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 400;
+  color: #5aa7e8;
+  border: 1px solid rgba(90, 167, 232, 0.5);
+  border-radius: 8px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
+.sharing-chip {
+  border-color: rgba(47, 155, 90, 0.6);
+  color: #7fd09a;
+}
+.sharing-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.received-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+}
+.received-box .btn {
+  align-self: flex-start;
+}
+.opinions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.opinion-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+/* outline buttons on the light dialog background */
+.modal .btn.btn-red-outline {
+  color: #c0392b;
+  background: #fff;
+}
+.modal .btn.btn-red-outline:hover:not(:disabled) {
+  background: #fdecea;
+}

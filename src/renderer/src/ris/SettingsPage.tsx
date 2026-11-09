@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Database, FolderOpen, HardDriveDownload, Mic, Plus, Save, Trash, Upload } from 'lucide-react'
+import { Database, FolderOpen, HardDriveDownload, Mic, Plus, Save, Share2, Trash, Upload } from 'lucide-react'
 import type { DataInfo, Settings } from '@shared/types'
 import { useUi } from '../common/ui'
 import { FONT_FAMILIES, FONT_SIZES } from './editor'
 import { SpeechModelsPanel } from './DictationControl'
 import { PhonePanel } from './PhonePanel'
+import { SharesList, useShares } from './Sharing'
 
 const api = window.api
 
@@ -265,6 +266,8 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
 
         <PhonePanel />
 
+        <SharingCard />
+
         <section className="card">
           <h3>Data</h3>
           {info && (
@@ -308,5 +311,23 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
         </section>
       </div>
     </div>
+  )
+}
+
+/** Settings card: cases this PC is sharing with other Personal PACS users. */
+function SharingCard() {
+  const shares = useShares()
+  return (
+    <section className="card">
+      <h3>
+        <Share2 size={15} /> Case sharing
+      </h3>
+      <p className="muted">
+        Share a case (images and report) with another Personal PACS user anywhere: select it in the worklist and click <b>Share</b>.
+        They paste the code or link into <b>Receive Case</b>. The case goes straight from this computer, encrypted – first by a
+        direct connection, otherwise through an encrypted relay. Keep Personal PACS open until it has been downloaded.
+      </p>
+      <SharesList shares={shares} />
+    </section>
   )
 }

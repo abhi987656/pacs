@@ -26,6 +26,7 @@ export interface StudyRow {
   visitType: string
   clinicalHistory: string
   manual: boolean // created by hand (reporting without images)
+  sharedFrom: string | null // received from another Personal PACS user (sender's name)
 }
 
 /** Details typed in for a case without images (also used to correct any study's details). */
@@ -433,6 +434,87 @@ export type PhoneEvent =
   | { type: 'paired'; device: PhoneDevice }
   | { type: 'synced'; device: string; changedStudies: number[]; summary: string }
 
+// ------------------------------------------------------------------ case sharing (PC <-> PC over the internet)
+
+/** stopped/expired: no more downloads (a report can still be sent back); closed: gone completely. */
+export type ShareStatus = 'preparing' | 'active' | 'stopped' | 'expired' | 'error' | 'closed'
+export type ShareLinkState = 'off' | 'starting' | 'ready' | 'unavailable'
+
+export interface ShareDownload {
+  id: string
+  name: string // receiver's name (from their Settings), '' if not set
+  via: 'direct' | 'relay'
+  bytes: number
+  total: number
+  done: boolean
+  lastSeen: string
+}
+
+/** A case this PC is sharing (sender side). */
+export interface ShareInfo {
+  id: string
+  studyId: number
+  title: string
+  code: string // "ABCDE-23456"
+  link: string | null // https link through the relay (clickable in WhatsApp), when the relay is up
+  message: string // ready-to-send text (link + code + instructions)
+  createdAt: string
+  expiresAt: string
+  replyUntil: string | null // a report can be sent back until then (null: replies not allowed)
+  anonymized: boolean
+  allowReply: boolean
+  status: ShareStatus
+  direct: ShareLinkState
+  relay: ShareLinkState
+  error: string | null
+  files: number
+  totalBytes: number
+  downloads: ShareDownload[]
+  replies: number
+}
+
+export type ReceivePhase = 'connecting' | 'downloading' | 'importing' | 'done' | 'error' | 'cancelled'
+
+export interface ReceiveProgress {
+  jobId: string
+  phase: ReceivePhase
+  via: 'direct' | 'relay' | null
+  title: string
+  sender: string
+  bytes: number
+  total: number
+  rate: number // bytes per second
+  message: string
+  studyId: number | null
+}
+
+/** A case this PC received (receiver side). */
+export interface ReceivedShareInfo {
+  id: string
+  studyId: number
+  senderName: string
+  receivedAt: string
+  replyUntil: string
+  allowReply: boolean
+  anonymized: boolean
+  repliedAt: string | null
+}
+
+export interface SecondOpinion {
+  id: number
+  studyId: number
+  fromName: string
+  fromDesignation: string
+  status: ReportStatus
+  html: string
+  text: string
+  receivedAt: string
+}
+
+export type ShareEvent =
+  | { type: 'share'; share: ShareInfo }
+  | { type: 'opinion'; studyId: number; fromName: string; title: string }
+
 export interface ImportProgress {
   running: boolean
   phase: 'scanning' | 'importing' | 'done' | 'cancelled'
@@ -524,6 +606,21 @@ export interface PacsApi {
   exportReport(studyId: number, kind: 'docx' | 'txt'): Promise<string | null>
   /** Reports changed by the phone app (study ids). */
   onReportsChanged(cb: (studyIds: number[]) => void): () => void
+  // case sharing with other Personal PACS users
+  shareCreate(studyId: number, opts: { anonymize: boolean; allowReply: boolean }): Promise<ShareInfo>
+  shareList(): Promise<ShareInfo[]>
+  /** Stops downloads; `close` also stops accepting a report back. */
+  shareStop(id: string, close?: boolean): Promise<void>
+  onShareEvent(cb: (e: ShareEvent) => void): () => void
+  receiveStart(input: string): Promise<string>
+  receiveCancel(jobId: string): Promise<void>
+  onReceiveProgress(cb: (p: ReceiveProgress) => void): () => void
+  /** A personalpacs:// link opened the app (takeShareLink: one that arrived before the window was ready). */
+  onShareLink(cb: (link: string) => void): () => void
+  takeShareLink(): Promise<string | null>
+  receivedInfo(studyId: number): Promise<ReceivedShareInfo | null>
+  replySend(studyId: number): Promise<string>
+  secondOpinions(studyId: number): Promise<SecondOpinion[]>
   // phone app
   phoneStatus(): Promise<PhoneLinkStatus>
   phoneSetEnabled(on: boolean): Promise<PhoneLinkStatus>
