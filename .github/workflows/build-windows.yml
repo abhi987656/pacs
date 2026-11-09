@@ -31,8 +31,17 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      # Electron and the installer tools are downloaded from GitHub during the build; those
+      # downloads now and then fail with a 502/504, so try up to three times.
       - name: Build installer (.exe)
-        run: npm run dist:win
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm run dist:win && exit 0
+            echo "::warning::Build attempt $i failed (often a download error) – trying again in 30 s"
+            sleep 30
+          done
+          exit 1
 
       # A release (not a build artifact): direct .exe downloads, and it doesn't use the account's
       # artifact storage. Only the newest build is kept.

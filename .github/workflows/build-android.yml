@@ -32,6 +32,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+          cache: gradle # keeps Gradle and its downloads between builds
 
       - name: Install dependencies
         run: npm ci
@@ -49,7 +50,15 @@ jobs:
         working-directory: android
         env:
           ANDROID_VERSION_CODE: ${{ github.run_number }}
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
+        # Gradle downloads its tools and libraries (some from GitHub); those downloads now and then
+        # fail with a 502/504, so try up to three times.
+        run: |
+          for i in 1 2 3; do
+            ./gradlew assembleRelease --no-daemon --stacktrace && exit 0
+            echo "::warning::Build attempt $i failed (often a download error) – trying again in 30 s"
+            sleep 30
+          done
+          exit 1
 
       # Shows which key signed the APK (should be the permanent key from the repository).
       - name: Check the signature
