@@ -5,9 +5,12 @@ import type { Types } from '@cornerstonejs/core'
 import * as csTools from '@cornerstonejs/tools'
 import {
   ArrowUpRight,
+  Bone,
   Bookmark,
   Box,
   Captions,
+  ChevronsUpDown,
+  Circle,
   CircleHelp,
   Columns2,
   Contrast,
@@ -16,6 +19,7 @@ import {
   Eraser,
   FileText,
   Hand,
+  Heart,
   Info,
   Lasso,
   Link,
@@ -31,6 +35,7 @@ import {
   Play,
   RotateCcw,
   Ruler,
+  Save,
   ScanLine,
   Search,
   StickyNote,
@@ -58,6 +63,7 @@ import {
   setPrimaryTool,
   setReferenceLines,
   setTextPrompt,
+  STICKY_TOOLS,
   str,
   TOOL_LABEL,
   zoomActualSize,
@@ -66,6 +72,8 @@ import {
 import type { DragMode, ToolName } from './cs'
 import { ContextMenu } from './ContextMenu'
 import type { MenuItem } from './ContextMenu'
+import { clearSpineLabels, setSpineNotifier } from './spine'
+import { SpinePanel } from './SpinePanel'
 import { Viewport } from './Viewport'
 import type { SlotInfo } from './Viewport'
 
@@ -79,6 +87,10 @@ const LAYOUTS: [number, number][] = [
   [1, 3],
   [2, 3]
 ]
+
+/** Annotations the viewer draws for itself (not measurements to save or delete). */
+const SYSTEM_ANNOTATION_TOOLS = new Set(['ReferenceLines', 'Crosshairs'])
+const isUserAnnotation = (a: csTools.Types.Annotation) => !!a.metadata?.toolName && !SYSTEM_ANNOTATION_TOOLS.has(a.metadata.toolName)
 
 const SCOUT_RE = /(scout|topogram|locali[sz]er|surview|survey|tracker|bolus|dose|monitor|plan|\bloc\b|smartprep)/i
 
@@ -169,11 +181,19 @@ const HOTKEY_TOOLS: Record<string, ToolName> = {
   g: 'Angle',
   f: 'FreehandROI',
   e: 'EllipticalROI',
+  h: 'CircleROI',
   o: 'Magnify',
+  p: 'SpineLabel',
   w: 'WindowLevel',
-  z: 'Zoom',
-  p: 'Pan',
+  z: 'StackScroll',
   x: 'Eraser'
+}
+
+/** Shown once when a tool that needs several clicks in a set order is chosen. */
+const TOOL_TIPS: Partial<Record<ToolName, string>> = {
+  CTR4: 'Cardiothoracic ratio: click both heart borders (widest points), then both inner chest walls.',
+  CTR6: 'Cardiothoracic ratio (6 points): click two points on the midline, then both heart borders, then both inner chest walls.',
+  PolygonROI: 'Polygon ROI: click the corners; click the first corner again (or double-click) to close it.'
 }
 
 const HELP: [string, string][] = [
@@ -186,7 +206,11 @@ const HELP: [string, string][] = [
   ['Shift + drag / Ctrl + drag', 'Move / copy a series to another tile'],
   ['Double-click middle button', 'Link window/level + zoom between tiles (same as I)'],
   ['R  T  A  D', 'Ruler, text, arrow, density value (HU)'],
-  ['G  F  E  O', 'Angle, freehand ROI, elliptical ROI, magnifying glass'],
+  ['G  F  E  H  O', 'Angle, freehand ROI, elliptical ROI, circle ROI, magnifying glass'],
+  ['P', 'Spine labels: pick the first level, click it on the image, then click above / below for the next levels'],
+  ['W / Z / Shift+Z / Shift+X', 'Window/level / dynamic scroll (left-drag through the images) / zoom / pan'],
+  ['X / Delete', 'Eraser / delete the selected measurement'],
+  ['V / Shift+Delete', 'Save the annotations with the study / delete all annotations'],
   ['L / Esc', 'Lock the current tool / back to window/level'],
   ['B', 'Bookmark – send the image to the report (key image)'],
   ['S  K  C  J', 'Linked scrolling on/off, add/remove tile, remove all, auto-link'],
@@ -263,6 +287,7 @@ export function ViewerApp() {
   // ------------------------------------------------------------ init
   useEffect(() => {
     setTextPrompt((label) => ui.prompt('Annotation', label))
+    setSpineNotifier((message) => ui.toast(message, 'info'))
   }, [ui])
 
   useEffect(() => {
@@ -360,6 +385,7 @@ export function ViewerApp() {
       setSlots([{ id: 'vp-0', kind: 'stack', seriesId: best?.id ?? null, studyId }])
       setActive(0)
       document.title = `${detail.study.patientName} – ${detail.study.description} – Viewer`
+      void loadSavedRef.current(studyId)
     },
     [ready, ensureImages, exitMpr]
   )
@@ -389,6 +415,10 @@ export function ViewerApp() {
     eventTarget.addEventListener(CoreEnums.Events.WEBGL_CONTEXT_LOST, onLost)
     return () => eventTarget.removeEventListener(CoreEnums.Events.WEBGL_CONTEXT_LOST, onLost)
   }, [currentStudyId, ui])
+
+  /** Saved annotations come back when a study is opened (or shown next to it). */
+  const loadSavedRef = useRef<(studyId: number) => Promise<unknown>>(async () => 0)
+  loadSavedRef.current = (studyId: number) => (annLoaded.current.has(studyId) ? Promise.resolve(0) : loadSavedAnnotations(studyId, false))
 
   const pendingStudy = useRef<number | null>(null)
   // After such a reload: open the study that was on screen.
@@ -629,12 +659,25 @@ export function ViewerApp() {
 
   // ------------------------------------------------------------ tools
   useEffect(() => {
-    if (ready) setPrimaryTool(tool, !!mpr)
+    if (!ready) return
+    // A measurement half placed (e.g. 2 of the 4 CTR points) is dropped when the tool changes.
+    for (const s of slotsRef.current) {
+      const el = getEngine().getViewport(s.id)?.element as HTMLDivElement | undefined
+      if (!el) continue
+      try {
+        csTools.cancelActiveManipulations(el)
+      } catch {
+        /* nothing in progress */
+      }
+    }
+    setPrimaryTool(tool, !!mpr)
   }, [tool, mpr, ready])
 
   const chooseTool = (t: ToolName, lock: boolean) => {
+    const tip = TOOL_TIPS[t]
+    if (tip && toolRef.current.tool !== t) ui.toast(tip, 'info')
     setTool(t)
-    setLocked(lock || isDragMode(t))
+    setLocked(lock || isDragMode(t) || STICKY_TOOLS.includes(t))
   }
 
   const cycleDragMode = (): DragMode => {
@@ -759,9 +802,120 @@ export function ViewerApp() {
   }
 
   const clearAnnotations = async () => {
-    if (!(await ui.confirm('Remove all measurements?', 'All measurements and annotations in the viewer will be removed.', 'Remove all', true))) return
-    csTools.annotation.state.removeAllAnnotations()
+    if (
+      !(await ui.confirm(
+        'Delete all annotations?',
+        'All measurements, labels and arrows in the viewer will be removed. Annotations saved with V stay saved until you save again.',
+        'Delete all',
+        true
+      ))
+    )
+      return
+    for (const a of csTools.annotation.state.getAllAnnotations()) {
+      if (a.annotationUID && isUserAnnotation(a)) csTools.annotation.state.removeAnnotation(a.annotationUID)
+    }
     getEngine().render()
+  }
+
+  const clearSpine = async () => {
+    const vp = activeVp()
+    if (!vp) return
+    if (!(await ui.confirm('Clear the spine labels?', 'All spine labels of this scan will be removed.', 'Clear', true))) return
+    clearSpineLabels(vp)
+    getEngine().render()
+  }
+
+  // ------------------------------------------------------------ saved annotations (V)
+  /** Studies whose saved annotations were read (saving them again may then remove some). */
+  const annLoaded = useRef(new Set<number>())
+
+  /** The annotations drawn on a study's images (any of its series, any plane). */
+  const annotationsOfStudy = (studyId: number): csTools.Types.Annotation[] => {
+    const images = new Set<string>()
+    const frames = new Set<string>()
+    for (const se of seriesMap[studyId] ?? []) {
+      const imgs = imagesRef.current[se.id]
+      if (!imgs) continue
+      for (const id of imgs.imageIds) images.add(id)
+      if (imgs.frameOfReferenceUid) frames.add(imgs.frameOfReferenceUid)
+    }
+    return csTools.annotation.state.getAllAnnotations().filter((a) => {
+      if (!isUserAnnotation(a)) return false
+      const ref = a.metadata?.referencedImageId
+      if (ref) return images.has(ref)
+      return !!a.metadata?.FrameOfReferenceUID && frames.has(a.metadata.FrameOfReferenceUID)
+    })
+  }
+
+  const serializeAnnotations = (list: csTools.Types.Annotation[]) =>
+    JSON.stringify(
+      list.map((a) => ({
+        annotationUID: a.annotationUID,
+        metadata: a.metadata,
+        data: a.data,
+        isLocked: !!a.isLocked,
+        isVisible: true
+      })),
+      (key, value: unknown) => {
+        if (key === 'cachedStats') return {} // recalculated when shown
+        if (key === 'roi' || key === 'enabledElement' || key === 'instance' || key === 'pointsInShape') return undefined
+        if (ArrayBuffer.isView(value)) return Array.from(value as unknown as ArrayLike<number>)
+        return value
+      }
+    )
+
+  /** Puts the saved annotations of a study back on its images. `replace` drops the unsaved ones first. */
+  const loadSavedAnnotations = async (studyId: number, replace: boolean): Promise<number> => {
+    const json = await api.getSavedAnnotations(studyId)
+    annLoaded.current.add(studyId)
+    const state = csTools.annotation.state
+    if (replace) for (const a of annotationsOfStudy(studyId)) if (a.annotationUID) state.removeAnnotation(a.annotationUID)
+    let list: csTools.Types.Annotation[] = []
+    try {
+      list = json ? (JSON.parse(json) as csTools.Types.Annotation[]) : []
+    } catch {
+      list = []
+    }
+    let n = 0
+    for (const a of list) {
+      if (!a?.annotationUID || !a.data || !isUserAnnotation(a) || state.getAnnotation(a.annotationUID)) continue
+      a.invalidated = true
+      a.highlighted = false
+      a.isSelected = false
+      a.data.cachedStats = {}
+      state.addAnnotation(a, a.metadata?.FrameOfReferenceUID ?? 'undefined')
+      n++
+    }
+    if (n || replace) {
+      try {
+        getEngine().render()
+      } catch {
+        /* not ready */
+      }
+    }
+    return n
+  }
+
+  const saveAnnotations = async () => {
+    let total = 0
+    let saved = 0
+    for (const sid of shown) {
+      const list = annotationsOfStudy(sid)
+      if (!list.length && !annLoaded.current.has(sid)) continue
+      await api.saveAnnotations(sid, serializeAnnotations(list))
+      annLoaded.current.add(sid)
+      total += list.length
+      saved++
+    }
+    if (!saved) ui.toast('There are no annotations to save.', 'info')
+    else if (!total) ui.toast('Saved: the study has no annotations now.', 'success')
+    else ui.toast(`${total} annotation${total === 1 ? '' : 's'} saved – they show again when the study is opened.`, 'success')
+  }
+
+  const reloadSavedAnnotations = async () => {
+    let n = 0
+    for (const sid of shown) n += await loadSavedAnnotations(sid, true)
+    ui.toast(n ? `${n} saved annotation${n === 1 ? '' : 's'} loaded` : 'No saved annotations for this study.', 'info')
   }
 
   /** The active tile as an image, with measurements burnt in. */
@@ -844,6 +998,7 @@ export function ViewerApp() {
     const curSeriesList = seriesMap[cur.id] ?? (await ensureSeries(cur.id))
     const priorSeries = await ensureSeries(prior.id)
     setShown((s) => (s.includes(prior.id) ? s : [...s, prior.id]))
+    void loadSavedRef.current(prior.id)
     const curSlot = slotsRef.current[active]
     const keepCurrent = curSlot?.studyId === cur.id ? curSlot : slotsRef.current.find((s) => s.studyId === cur.id)
     const curSeries = curSeriesList.find((s) => s.id === keepCurrent?.seriesId) ?? pickBestSeries(curSeriesList)
@@ -908,6 +1063,7 @@ export function ViewerApp() {
       for (const s of list) if (s.thumb) t[s.id] = s.thumb
       setThumbs((x) => ({ ...x, ...t }))
       setShown([...shown, studyId])
+      void loadSavedRef.current(studyId)
     }
   }
 
@@ -998,6 +1154,8 @@ export function ViewerApp() {
       else if (e.altKey && lower === 'i') setInfo(true)
       else if (e.altKey && lower === 'n') setNotes(studies[0]?.clinicalHistory ?? '')
       else if (e.altKey && lower === 'e') setShowTop((v) => !v)
+      else if (e.shiftKey && lower === 'z') chooseTool('Zoom', true)
+      else if (e.shiftKey && lower === 'x') chooseTool('Pan', true)
       else if (e.shiftKey && lower === 't') setOverlay((v) => !v)
       else if (e.shiftKey && lower === 'a') setShowAnn((v) => !v)
       else if (e.shiftKey && lower === 'i') transform('invert')
@@ -1012,6 +1170,7 @@ export function ViewerApp() {
       else if (k === '=' || k === '+') transform('fit')
       else if (k === '-') transform('actual')
       else if (k === ' ') toggleCine()
+      else if (k === 'Delete' && e.shiftKey) void clearAnnotations()
       else if (k === 'Delete' || k === 'Backspace') deleteSelectedAnnotations()
       else if (k === 'Escape') {
         if (!isDragMode(tool) && tool !== 'Crosshairs') chooseTool('WindowLevel', true)
@@ -1024,6 +1183,7 @@ export function ViewerApp() {
           setLocked(true)
           ui.toast(`${TOOL_LABEL[tool]} locked (Esc to release)`, 'info')
         } else if (lower === 'b') void keyImage()
+        else if (lower === 'v') void saveAnnotations()
         else if (lower === 'i') togglePresLink()
         else if (lower === 's') toggleScrollLink()
         else if (lower === 'k') toggleLinkMember()
@@ -1081,17 +1241,44 @@ export function ViewerApp() {
     { label: 'Original (from scanner)', hint: 'Num 0', onClick: resetVoi },
     ...CT_PRESETS.map((p) => ({ label: `${p.name}  (${p.ww}/${p.wc})`, hint: p.key ? `Num ${p.key}` : '', onClick: () => applyPreset(p.ww, p.wc) }))
   ]
+  const pick = (label: string, t: ToolName, hint?: string): MenuItem => ({
+    label,
+    hint,
+    checked: tool === t,
+    onClick: () => chooseTool(t, false)
+  })
+  const annotationItems: MenuItem[] = [
+    pick('Ruler', 'Length', 'R'),
+    pick('Angle', 'Angle', 'G'),
+    pick('Cobb Angle', 'CobbAngle'),
+    pick('Elliptical ROI', 'EllipticalROI', 'E'),
+    pick('Circle ROI', 'CircleROI', 'H'),
+    pick('Rectangular ROI', 'RectangleROI'),
+    pick('Polygon ROI', 'PolygonROI'),
+    pick('Freehand ROI', 'FreehandROI', 'F'),
+    pick('Bidirectional (long/short axis)', 'Bidirectional'),
+    'sep',
+    pick('Text', 'Label', 'T'),
+    pick('Arrow', 'ArrowAnnotate', 'A'),
+    pick('Spine Labels', 'SpineLabel', 'P'),
+    pick('Cardiothoracic Ratio (4 points)', 'CTR4'),
+    pick('Cardiothoracic Ratio (6 points)', 'CTR6'),
+    'sep',
+    { label: 'Show Annotations', hint: 'Shift+A', checked: showAnn, onClick: () => setShowAnn((v) => !v) },
+    { label: 'Save Annotations', hint: 'V', onClick: () => void saveAnnotations() },
+    { label: 'Load Saved Annotations', onClick: () => void reloadSavedAnnotations() },
+    { label: 'Delete All Annotations', hint: 'Shift+Del', onClick: () => void clearAnnotations() }
+  ]
   const menuItems: MenuItem[] = [
-    { label: 'Window Level', checked: tool === 'WindowLevel', onClick: () => chooseTool('WindowLevel', true) },
-    { label: 'Zoom', checked: tool === 'Zoom', onClick: () => chooseTool('Zoom', true) },
-    { label: 'Pan', checked: tool === 'Pan', onClick: () => chooseTool('Pan', true) },
-    { label: 'Ruler', hint: 'R', checked: tool === 'Length', onClick: () => chooseTool('Length', false) },
-    { label: 'Text', hint: 'T', checked: tool === 'Label', onClick: () => chooseTool('Label', false) },
-    { label: 'Arrow', hint: 'A', checked: tool === 'ArrowAnnotate', onClick: () => chooseTool('ArrowAnnotate', false) },
+    { label: 'Window Level', hint: 'W', checked: tool === 'WindowLevel', onClick: () => chooseTool('WindowLevel', true) },
+    { label: 'Zoom', hint: 'Shift+Z', checked: tool === 'Zoom', onClick: () => chooseTool('Zoom', true) },
+    { label: 'Pan', hint: 'Shift+X', checked: tool === 'Pan', onClick: () => chooseTool('Pan', true) },
+    { label: 'Dynamic Scroll', hint: 'Z', checked: tool === 'StackScroll', onClick: () => chooseTool('StackScroll', true) },
     { label: 'Density Value', hint: 'D', checked: tool === 'Probe', onClick: () => chooseTool('Probe', false) },
     { label: 'Lock Tools', hint: 'L', checked: locked && !isDragMode(tool), onClick: () => setLocked(true) },
     'sep',
     { label: 'Image Presets', submenu: presetItems },
+    { label: 'Annotations', submenu: annotationItems },
     {
       label: 'Scale, Rotate, Flip',
       submenu: [
@@ -1109,19 +1296,11 @@ export function ViewerApp() {
       label: 'Tools',
       submenu: [
         { label: 'Show Text Overlay', hint: 'Shift+T', checked: overlay, onClick: () => setOverlay((v) => !v) },
-        { label: 'Show Annotations', hint: 'Shift+A', checked: showAnn, onClick: () => setShowAnn((v) => !v) },
         'sep',
-        { label: 'Angle', hint: 'G', onClick: () => chooseTool('Angle', false) },
-        { label: 'Cobb Angle', onClick: () => chooseTool('CobbAngle', false) },
-        { label: 'Freehand ROI', hint: 'F', onClick: () => chooseTool('FreehandROI', false) },
-        { label: 'Elliptical ROI', hint: 'E', onClick: () => chooseTool('EllipticalROI', false) },
-        { label: 'Rectangular ROI', onClick: () => chooseTool('RectangleROI', false) },
-        { label: 'Bidirectional (long/short axis)', onClick: () => chooseTool('Bidirectional', false) },
-        { label: 'Magnifying Glass', hint: 'O', onClick: () => chooseTool('Magnify', false) },
-        { label: 'Eraser', hint: 'X', onClick: () => chooseTool('Eraser', true) },
+        { label: 'Magnifying Glass', hint: 'O', checked: tool === 'Magnify', onClick: () => chooseTool('Magnify', false) },
+        { label: 'Eraser', hint: 'X', checked: tool === 'Eraser', onClick: () => chooseTool('Eraser', true) },
         'sep',
-        { label: 'Bookmark Image (key image to report)', hint: 'B', onClick: () => void keyImage() },
-        { label: 'Delete all measurements', onClick: () => void clearAnnotations() }
+        { label: 'Bookmark Image (key image to report)', hint: 'B', onClick: () => void keyImage() }
       ]
     },
     {
@@ -1289,17 +1468,21 @@ export function ViewerApp() {
         ))}
         <span className="v-sep" />
         {toolBtn('WindowLevel', 'Window level (left-drag; Alt+drag)', <SunMoon size={17} />)}
-        {toolBtn('Zoom', 'Zoom (Alt+Ctrl+drag; hold left + right-click to switch)', <ZoomIn size={17} />)}
-        {toolBtn('Pan', 'Pan (Alt+Shift+drag)', <Hand size={17} />)}
+        {toolBtn('Zoom', 'Zoom (Shift+Z; Alt+Ctrl+drag; hold left + right-click to switch)', <ZoomIn size={17} />)}
+        {toolBtn('Pan', 'Pan (Shift+X; Alt+Shift+drag)', <Hand size={17} />)}
+        {toolBtn('StackScroll', 'Dynamic scroll – left-drag up/down through the images (Z)', <ChevronsUpDown size={17} />)}
         {toolBtn('Magnify', 'Magnifying glass (O)', <Search size={17} />)}
         <span className="v-sep" />
         {toolBtn('Length', 'Ruler (R)', <Ruler size={17} />)}
         {toolBtn('Angle', 'Angle (G)', <Triangle size={17} />)}
         {toolBtn('EllipticalROI', 'Elliptical ROI – mean/SD HU, area (E)', <Ellipse size={17} />)}
+        {toolBtn('CircleROI', 'Circle ROI – mean/SD HU, area (H)', <Circle size={17} />)}
         {toolBtn('FreehandROI', 'Freehand ROI (F)', <Lasso size={17} />)}
         {toolBtn('Probe', 'Density value – HU (D)', <Crosshair size={17} />)}
         {toolBtn('ArrowAnnotate', 'Arrow (A)', <ArrowUpRight size={17} />)}
         {toolBtn('Label', 'Text (T)', <Type size={17} />)}
+        {toolBtn('SpineLabel', 'Spine labels – pick the first level, then click above / below (P)', <Bone size={17} />)}
+        {toolBtn('CTR4', 'Cardiothoracic ratio (4 points; 6-point version in the right-click menu)', <Heart size={17} />)}
         {toolBtn('Eraser', 'Eraser – click a measurement to delete (X)', <Eraser size={17} />)}
         <VBtn title={locked ? 'Tool locked (Esc releases)' : 'Lock the current tool (L)'} on={locked && !isDragMode(tool)} onClick={() => setLocked((v) => !v)}>
           {locked ? <Lock size={16} /> : <LockOpen size={16} />}
@@ -1381,6 +1564,9 @@ export function ViewerApp() {
         <VBtn title="Bookmark – send key image to the report (B)" onClick={() => void keyImage()}>
           <Bookmark size={17} />
         </VBtn>
+        <VBtn title="Save the annotations with the study (V)" onClick={() => void saveAnnotations()} disabled={!cur}>
+          <Save size={16} />
+        </VBtn>
         <VBtn title="Text overlay on/off (Shift+T)" on={overlay} onClick={() => setOverlay((o) => !o)}>
           <Captions size={17} />
         </VBtn>
@@ -1437,13 +1623,24 @@ export function ViewerApp() {
                 onSeriesDrag={onSeriesDrag}
                 onMiddleDoubleClick={togglePresLink}
                 onActivate={() => setActive(i)}
-                onDoubleClick={() => setMaximized((m) => (m === i ? null : slots.length > 1 ? i : null))}
+                onDoubleClick={() => {
+                  if (!isDragMode(tool) && tool !== 'StackScroll') return
+                  setMaximized((m) => (m === i ? null : slots.length > 1 ? i : null))
+                }}
                 onDropSeries={(seriesId, studyId) => void loadIntoSlot(i, seriesId, studyId)}
                 onImageChange={onImageChange}
               />
             )
           })}
         {!ready && <div className="v-welcome">Starting viewer…</div>}
+        {ready && tool === 'SpineLabel' && (
+          <SpinePanel
+            getViewport={activeVp}
+            activeKey={slots[active]?.id ?? ''}
+            onClear={() => void clearSpine()}
+            onClose={() => chooseTool('WindowLevel', true)}
+          />
+        )}
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}

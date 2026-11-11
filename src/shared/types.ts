@@ -574,6 +574,9 @@ export interface PacsApi {
   showStudyInFolder(studyId: number): Promise<void>
   getSeriesImages(seriesId: number): Promise<SeriesImages>
   saveSeriesThumb(seriesId: number, dataUrl: string): Promise<void>
+  /** Viewer measurements / labels saved for a study (V), as JSON; null when none were saved. */
+  getSavedAnnotations(studyId: number): Promise<string | null>
+  saveAnnotations(studyId: number, json: string): Promise<void>
   // import
   pickAndImport(kind: 'folder' | 'files'): Promise<ImportResult | null>
   importPaths(paths: string[]): Promise<ImportResult>

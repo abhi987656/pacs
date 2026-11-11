@@ -104,15 +104,30 @@ to another Personal PACS user anywhere on the internet, straight from your PC, e
 **Viewer window** (laid out like a hospital PACS, with mouse and hot keys like Fujifilm Synapse; put it on
 a second monitor if you have one)
 - Study list with prior studies, series thumbnails, and drag-and-drop of series into viewports.
-- Layouts 1×1 to 2×3. Double-click a viewport to maximise it.
+- Layouts 1×1 to 2×3. Double-click a viewport to maximise it (while window/level, zoom, pan or
+  dynamic scroll is the mouse tool).
 - Right-click opens an image tools menu with presets, tools, scale/rotate/flip, reference lines, tile
   formats, linking, cine, MPR, save and copy.
 - Window/level presets on the **number pad** 1–9 (0 = original), with Num Lock on or off:
   1 Body Soft Tissue, 2 Body Lung, 3 Body Bone, 4 Body Liver, 5 Head Mid Brain, 6 Head Post Fossa,
   7 Head Blood, 8 Head Bone, 9 CTA MIP. The menu also has Head IAC, Stroke and Subdural.
-- Measurements: length, angle, ellipse/rectangle ROI (mean/SD HU, area), probe (HU), bidirectional and arrow.
+- Measurements: length, angle, Cobb angle, ellipse / circle / rectangle / polygon / freehand ROI (mean/SD
+  HU, area), probe (HU), bidirectional, text and arrow (right-click › **Annotations**).
+- **Spine labels** (key **P**): pick the first level in the small panel (C1 … S5, Co, or the disc
+  levels C2-C3 … L5-S1) and click that vertebra. Each further click above or below the labels names
+  the next level in order (above L3 → L2, below → L4); a click between two labels fills a gap.
+  The labels show on every slice of the sagittal / coronal series (and on the other series of the
+  same scan in that plane), and **axial images show the level they are at** ("Level ≈ L4", or
+  "L4-L5" in the disc space). Drag a label to move it; Delete removes the selected one. Works on
+  X-rays too (then "above" is the top of the screen). Drag the panel by its title to move it.
+- **Cardiothoracic ratio**: 4 points (both heart borders, then both inner chest walls; the widths
+  are measured across the image) or 6 points (two on the midline first; CTR = (MRD + MLD) / chest
+  width, measured square to the midline).
+- **Save annotations** (key **V**): measurements and labels are kept with the study and come back
+  when it is opened again. **Shift+Delete** deletes all annotations on screen (the saved ones stay
+  until you save again); right-click › Annotations › **Load Saved Annotations** puts them back.
 - Text overlay: patient and series details, W/L, slice location and thickness, kVp/mA, TR/TE,
-  plus orientation markers.
+  plus orientation markers (on X-rays from their Patient Orientation tag; none when it is missing).
 - **Compare with prior** (key **C**): current and previous study side by side, with linked scrolling.
 - **Coronal / sagittal in the same tile**: **3** shows the coronal view (3 again = back to the original
   axial images), **?** shows the sagittal view (? again = coronal). Window/level is kept.
@@ -204,7 +219,7 @@ How it connects, and what is protected:
 
 | Mouse / key | Action |
 | --- | --- |
-| Left-drag | Window/level (left-right = width, up-down = level) |
+| Left-drag | Window/level (left-right = width, up-down = level), or the chosen tool |
 | Hold left + click right | Switch the drag between window/level → zoom → pan |
 | Right click | Image tools menu |
 | Wheel / middle-drag | Scroll through images |
@@ -213,7 +228,12 @@ How it connects, and what is protected:
 | Alt+drag / Alt+Ctrl+drag / Alt+Shift+drag | Window/level / zoom / pan |
 | Shift+drag / Ctrl+drag | Move / copy a series to another tile |
 | R T A D | Ruler, text, arrow, density value (HU). One use, then back to window/level |
-| G F E O | Angle, freehand ROI, elliptical ROI, magnifying glass |
+| G F E H O | Angle, freehand ROI, elliptical ROI, circle ROI, magnifying glass |
+| P | Spine labels: pick the first level, click it, then click above / below for the next ones |
+| W / Z | Window/level / dynamic scroll (left-drag up or down through the images) |
+| Shift+Z / Shift+X | Zoom / pan |
+| X / Delete | Eraser / delete the selected measurement |
+| V / Shift+Delete | Save the annotations with the study / delete all annotations |
 | L / Esc | Lock the tool / back to window/level |
 | B | Bookmark: key image into the report |
 | S K C J | Linked scrolling on/off, add/remove tile, remove all, auto-link |

@@ -243,6 +243,13 @@ function registerIpc(): void {
     const sorted = sortInstances(db.getInstances(seriesId))
     return buildSeriesImages(seriesId, sorted, DICOM_BASE_URL)
   })
+  ipcMain.handle('annotations:get', (_e, id: unknown) => db.getAnnotations(asId(id)))
+  ipcMain.handle('annotations:save', (_e, id: unknown, json: unknown) => {
+    if (typeof json !== 'string' || json.length > 20_000_000) throw new Error('Invalid annotations')
+    const parsed: unknown = JSON.parse(json)
+    if (!Array.isArray(parsed)) throw new Error('Invalid annotations')
+    db.saveAnnotations(asId(id), parsed.length ? json : null)
+  })
   ipcMain.handle('series:saveThumb', (_e, id: unknown, dataUrl: unknown) => {
     if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/') && dataUrl.length < 200_000) {
       db.setSeriesThumb(asId(id), dataUrl)

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Enums, utilities as csUtils } from '@cornerstonejs/core'
+import { Enums, eventTarget, utilities as csUtils } from '@cornerstonejs/core'
 import type { Types } from '@cornerstonejs/core'
 import * as csTools from '@cornerstonejs/tools'
 import type { SeriesImages, StudyRow } from '@shared/types'
@@ -24,6 +24,7 @@ import {
   zoomBy
 } from './cs'
 import type { DragMode, SliceAxis } from './cs'
+import { SpineLabelTool, spineLevelAt } from './spine'
 
 export type SlotKind = 'stack' | 'axial' | 'sagittal' | 'coronal'
 
@@ -48,6 +49,8 @@ interface OverlayState {
   imageId: string | undefined
   /** Reformatted views: the direction in which the slice number increases (camera normal). */
   dir: [number, number, number] | null
+  /** Axial images: the spine level, from labels placed on the sagittal / coronal images. */
+  level: string | null
 }
 
 interface Props {
@@ -83,7 +86,17 @@ const ORIENT: Record<Exclude<SlotKind, 'stack'>, Enums.OrientationAxis> = {
 
 export function Viewport(p: Props) {
   const elRef = useRef<HTMLDivElement>(null)
-  const [ov, setOv] = useState<OverlayState>({ index: 0, total: 0, ww: null, wc: null, zoom: 1, markers: null, imageId: undefined, dir: null })
+  const [ov, setOv] = useState<OverlayState>({
+    index: 0,
+    total: 0,
+    ww: null,
+    wc: null,
+    zoom: 1,
+    markers: null,
+    imageId: undefined,
+    dir: null,
+    level: null
+  })
   const [dropping, setDropping] = useState(false)
   const lastIndex = useRef(0)
   const raf = useRef(0)
@@ -243,7 +256,7 @@ export function Viewport(p: Props) {
         } catch {
           /* not ready */
         }
-        setOv({ index, total, ww: voi?.ww ?? null, wc: voi?.wc ?? null, zoom, markers: orientationMarkers(vp), imageId, dir })
+        setOv({ index, total, ww: voi?.ww ?? null, wc: voi?.wc ?? null, zoom, markers: orientationMarkers(vp), imageId, dir, level: spineLevelAt(vp) })
       })
     }
     const onNewImage = (e: Event) => {
@@ -258,11 +271,24 @@ export function Viewport(p: Props) {
     element.addEventListener(Enums.Events.STACK_NEW_IMAGE, onNewImage)
     const prevent = (e: Event) => e.preventDefault()
     element.addEventListener('contextmenu', prevent)
+    // Spine labels placed in another tile change the level shown on this one.
+    const onAnnotation = (e: Event) => {
+      const a = (e as CustomEvent<{ annotation?: csTools.Types.Annotation }>).detail?.annotation
+      if (!a || a.metadata?.toolName === SpineLabelTool.toolName) refresh()
+    }
+    const annotationEvents = [
+      csTools.Enums.Events.ANNOTATION_ADDED,
+      csTools.Enums.Events.ANNOTATION_COMPLETED,
+      csTools.Enums.Events.ANNOTATION_MODIFIED,
+      csTools.Enums.Events.ANNOTATION_REMOVED
+    ]
+    for (const ev of annotationEvents) eventTarget.addEventListener(ev, onAnnotation)
 
     return () => {
       for (const ev of events) element.removeEventListener(ev, refresh)
       element.removeEventListener(Enums.Events.STACK_NEW_IMAGE, onNewImage)
       element.removeEventListener('contextmenu', prevent)
+      for (const ev of annotationEvents) eventTarget.removeEventListener(ev, onAnnotation)
       cancelAnimationFrame(raf.current)
       try {
         csTools.utilities.cine.stopClip(element)
@@ -430,6 +456,11 @@ export function Viewport(p: Props) {
             {nat?.PatientPosition != null && <div>{str(nat.PatientPosition)}</div>}
           </div>
           <div className="ov bl">
+            {ov.level && (
+              <div className="spine-level" title="Estimated from the spine labels on the sagittal / coronal images">
+                Level ≈ {ov.level}
+              </div>
+            )}
             {isCT ? (
               <>
                 {nat?.GantryDetectorTilt != null && <div>Tilt: {num(nat.GantryDetectorTilt)}</div>}

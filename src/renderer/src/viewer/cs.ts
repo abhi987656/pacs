@@ -3,6 +3,7 @@ import {
   cornerstoneStreamingImageVolumeLoader,
   Enums,
   eventTarget,
+  getEnabledElement,
   init as csInit,
   metaData,
   RenderingEngine,
@@ -12,6 +13,8 @@ import {
 import type { Types } from '@cornerstonejs/core'
 import { init as dicomLoaderInit, prefetchPart10Instance } from '@cornerstonejs/dicom-image-loader'
 import * as csTools from '@cornerstonejs/tools'
+import { CTR4Tool, CTR6Tool, PolygonROITool } from './measureTools'
+import { SpineLabelTool } from './spine'
 
 export const RENDERING_ENGINE_ID = 'pacs-engine'
 export const STACK_TOOLGROUP = 'stack-tools'
@@ -26,6 +29,7 @@ const {
   AngleTool,
   CobbAngleTool,
   EllipticalROITool,
+  CircleROITool,
   RectangleROITool,
   PlanarFreehandROITool,
   ProbeTool,
@@ -54,12 +58,17 @@ export type ToolName =
   | 'Angle'
   | 'CobbAngle'
   | 'EllipticalROI'
+  | 'CircleROI'
   | 'RectangleROI'
+  | 'PolygonROI'
   | 'FreehandROI'
   | 'Probe'
   | 'ArrowAnnotate'
   | 'Label'
   | 'Bidirectional'
+  | 'SpineLabel'
+  | 'CTR4'
+  | 'CTR6'
   | 'Eraser'
   | 'Magnify'
   | 'Crosshairs'
@@ -77,12 +86,17 @@ const TOOL_CLASS: Record<ToolName, { toolName: string }> = {
   Angle: AngleTool,
   CobbAngle: CobbAngleTool,
   EllipticalROI: EllipticalROITool,
+  CircleROI: CircleROITool,
   RectangleROI: RectangleROITool,
+  PolygonROI: PolygonROITool,
   FreehandROI: PlanarFreehandROITool,
   Probe: ProbeTool,
   ArrowAnnotate: ArrowAnnotateTool,
   Label: LabelTool,
   Bidirectional: BidirectionalTool,
+  SpineLabel: SpineLabelTool,
+  CTR4: CTR4Tool,
+  CTR6: CTR6Tool,
   Eraser: EraserTool,
   Magnify: MagnifyTool,
   Crosshairs: CrosshairsTool
@@ -92,23 +106,43 @@ export const TOOL_LABEL: Record<ToolName, string> = {
   WindowLevel: 'Window level',
   Pan: 'Pan',
   Zoom: 'Zoom',
-  StackScroll: 'Scroll',
+  StackScroll: 'Dynamic scroll',
   Length: 'Ruler',
   Angle: 'Angle',
   CobbAngle: 'Cobb angle',
   EllipticalROI: 'Elliptical ROI',
+  CircleROI: 'Circle ROI',
   RectangleROI: 'Rectangular ROI',
+  PolygonROI: 'Polygon ROI',
   FreehandROI: 'Freehand ROI',
   Probe: 'Density value',
   ArrowAnnotate: 'Arrow',
   Label: 'Text',
   Bidirectional: 'Bidirectional',
+  SpineLabel: 'Spine labels',
+  CTR4: 'CTR (4 points)',
+  CTR6: 'CTR (6 points)',
   Eraser: 'Eraser',
   Magnify: 'Magnifying glass',
   Crosshairs: 'Crosshairs'
 }
 
-const MPR_TOOLS: ToolName[] = ['WindowLevel', 'Pan', 'Zoom', 'StackScroll', 'Length', 'Angle', 'EllipticalROI', 'Probe', 'Crosshairs']
+const MPR_TOOLS: ToolName[] = [
+  'WindowLevel',
+  'Pan',
+  'Zoom',
+  'StackScroll',
+  'Length',
+  'Angle',
+  'EllipticalROI',
+  'CircleROI',
+  'Probe',
+  'SpineLabel',
+  'Crosshairs'
+]
+
+/** Tools that stay on after use (modes, and tools used for many clicks in a row). */
+export const STICKY_TOOLS: ToolName[] = ['StackScroll', 'SpineLabel', 'Eraser', 'Crosshairs']
 
 export const toolNameOf = (t: ToolName): string => TOOL_CLASS[t].toolName
 
@@ -235,12 +269,36 @@ export function onAnnotationCompleted(cb: () => void): () => void {
   return () => eventTarget.removeEventListener(csTools.Enums.Events.ANNOTATION_COMPLETED, handler)
 }
 
+interface HitTestTool {
+  getToolName(): string
+  filterInteractableAnnotationsForElement?(element: HTMLDivElement, annotations: csTools.Types.Annotations): csTools.Types.Annotations
+  isPointNearTool?(element: HTMLDivElement, annotation: csTools.Types.Annotation, point: Types.Point2, proximity: number, type: string): boolean
+  getHandleNearImagePoint?(element: HTMLDivElement, annotation: csTools.Types.Annotation, point: Types.Point2, proximity: number): unknown
+}
+
+/**
+ * Whether a click here would grab a measurement (then it is edited instead of changing the window).
+ * Checks what each tool shows on this image, so spine labels drawn on every slice count too.
+ */
 export function annotationNear(element: HTMLDivElement, x: number, y: number): boolean {
   try {
-    return !!csTools.utilities.getAnnotationNearPoint(element, [x, y], 8)
+    const enabled = getEnabledElement(element)
+    if (!enabled) return false
+    const group = ToolGroupManager.getToolGroupForViewport(enabled.viewportId, enabled.renderingEngineId)
+    if (!group) return false
+    for (const tool of Object.values(group.getToolInstances()) as HitTestTool[]) {
+      if (!tool.isPointNearTool || !tool.filterInteractableAnnotationsForElement) continue
+      const all = csTools.annotation.state.getAnnotations(tool.getToolName(), element)
+      if (!all?.length) continue
+      for (const a of tool.filterInteractableAnnotationsForElement(element, all) ?? []) {
+        if (a.isLocked || a.isVisible === false) continue
+        if (tool.isPointNearTool(element, a, [x, y], 8, 'mouse') || tool.getHandleNearImagePoint?.(element, a, [x, y], 8)) return true
+      }
+    }
   } catch {
-    return false
+    /* not ready */
   }
+  return false
 }
 
 // ------------------------------------------------------------------ window/level presets
@@ -354,16 +412,54 @@ function letterFor(v: Types.Point3): string {
     .join('')
 }
 
+const LETTER_DIR: Record<string, Types.Point3> = { L: [1, 0, 0], R: [-1, 0, 0], P: [0, 1, 0], A: [0, -1, 0], H: [0, 0, 1], F: [0, 0, -1] }
+
+/** "LF" -> the patient direction it names (DICOM Patient Orientation letters). */
+function directionOf(letters: string): Types.Point3 | null {
+  let v: Types.Point3 = [0, 0, 0]
+  for (const ch of letters.trim().toUpperCase()) {
+    const d = LETTER_DIR[ch]
+    if (!d) return null
+    v = [v[0] + d[0], v[1] + d[1], v[2] + d[2]]
+  }
+  return Math.hypot(v[0], v[1], v[2]) > 0 ? v : null
+}
+
+/**
+ * Maps the viewport's world directions to the patient. CT / MR: world = patient coordinates.
+ * X-rays have no position in the patient; their Patient Orientation tag says which way the rows
+ * and columns run (e.g. L\F). Without it no letters are shown rather than wrong ones.
+ */
+function patientMapping(vp: Types.IViewport): ((v: Types.Point3) => Types.Point3) | null {
+  if (vp.type !== Enums.ViewportType.STACK) return (v) => v
+  const nat = getNatural((vp as Types.IStackViewport).getCurrentImageId())
+  if (!nat) return (v) => v
+  const iop = nat.ImageOrientationPatient
+  if (Array.isArray(iop) && iop.length === 6) return (v) => v
+  const po = str(nat.PatientOrientation).split('\\')
+  const rowDir = po.length === 2 ? directionOf(po[0]) : null
+  const colDir = po.length === 2 ? directionOf(po[1]) : null
+  if (!rowDir || !colDir) return null
+  // Without an orientation Cornerstone lays the image out with rows along +x and columns along +y.
+  return (v) => [
+    v[0] * rowDir[0] + v[1] * colDir[0],
+    v[0] * rowDir[1] + v[1] * colDir[1],
+    v[0] * rowDir[2] + v[1] * colDir[2]
+  ]
+}
+
 /** Orientation letters at the top / bottom / left / right edges of a viewport. */
 export function orientationMarkers(vp: Types.IViewport): { top: string; bottom: string; left: string; right: string } | null {
   try {
     const [w, h] = [vp.canvas.clientWidth, vp.canvas.clientHeight]
     if (!w || !h) return null
+    const toPatient = patientMapping(vp)
+    if (!toPatient) return null
     const c = vp.canvasToWorld([w / 2, h / 2])
     const r = vp.canvasToWorld([w / 2 + 10, h / 2])
     const d = vp.canvasToWorld([w / 2, h / 2 + 10])
     const norm = (a: Types.Point3, b: Types.Point3): Types.Point3 => {
-      const v: Types.Point3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+      const v = toPatient([b[0] - a[0], b[1] - a[1], b[2] - a[2]])
       const l = Math.hypot(v[0], v[1], v[2]) || 1
       return [v[0] / l, v[1] / l, v[2] / l]
     }

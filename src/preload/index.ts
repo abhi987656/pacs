@@ -21,6 +21,8 @@ const api: PacsApi = {
   showStudyInFolder: (id) => ipcRenderer.invoke('studies:showInFolder', id),
   getSeriesImages: (id) => ipcRenderer.invoke('series:images', id),
   saveSeriesThumb: (id, dataUrl) => ipcRenderer.invoke('series:saveThumb', id, dataUrl),
+  getSavedAnnotations: (studyId) => ipcRenderer.invoke('annotations:get', studyId),
+  saveAnnotations: (studyId, json) => ipcRenderer.invoke('annotations:save', studyId, json),
 
   pickAndImport: (kind) => ipcRenderer.invoke('import:pick', kind),
   importPaths: (paths) => ipcRenderer.invoke('import:paths', paths),

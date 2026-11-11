@@ -356,6 +356,19 @@ export class Db {
     }
     if (v < 3) this.transaction(() => this.migrateV3())
     if (v < 4) this.transaction(() => this.migrateV4())
+    if (v < 5) this.transaction(() => this.migrateV5())
+  }
+
+  /** Measurements and labels saved from the viewer (V), per study. */
+  private migrateV5(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS annotations (
+        study_id INTEGER PRIMARY KEY REFERENCES studies(id) ON DELETE CASCADE,
+        json TEXT NOT NULL,
+        saved_at TEXT NOT NULL
+      );
+    `)
+    this.db.exec('PRAGMA user_version = 5')
   }
 
   /** Case sharing with other Personal PACS users (sender and receiver side). */
@@ -824,6 +837,25 @@ export class Db {
 
   setSeriesThumb(seriesId: number, dataUrl: string): void {
     this.run('UPDATE series SET thumb = ? WHERE id = ?', dataUrl, seriesId)
+  }
+
+  getAnnotations(studyId: number): string | null {
+    const r = this.get('SELECT json FROM annotations WHERE study_id = ?', studyId) as Row | undefined
+    return r ? str(r.json) : null
+  }
+
+  /** null = nothing saved any more. */
+  saveAnnotations(studyId: number, json: string | null): void {
+    if (json == null) this.run('DELETE FROM annotations WHERE study_id = ?', studyId)
+    else {
+      this.run(
+        `INSERT INTO annotations (study_id, json, saved_at) VALUES (?, ?, ?)
+         ON CONFLICT(study_id) DO UPDATE SET json = excluded.json, saved_at = excluded.saved_at`,
+        studyId,
+        json,
+        new Date().toISOString()
+      )
+    }
   }
 
   counts(): { studies: number; series: number; images: number; reports: number } {
