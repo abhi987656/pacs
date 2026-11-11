@@ -517,7 +517,9 @@ export type ShareEvent =
 
 export interface ImportProgress {
   running: boolean
-  phase: 'scanning' | 'importing' | 'done' | 'cancelled'
+  phase: 'scanning' | 'unpacking' | 'importing' | 'done' | 'cancelled'
+  /** While a ZIP archive is being unpacked. */
+  zip?: { name: string; done: number; total: number } | null
   filesFound: number
   processed: number
   imported: number

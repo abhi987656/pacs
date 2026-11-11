@@ -427,28 +427,138 @@ export async function prefetchSeries(imageIds: string[], onProgress: (done: numb
   await Promise.all(Array.from({ length: 8 }, worker))
 }
 
-const volumesInFlight = new Map<string, Promise<string>>()
+type VolumeProgress = (pct: number) => void
+
+interface VolumeJob {
+  promise: Promise<string>
+  pct: number
+  listeners: Set<VolumeProgress>
+}
+
+const volumeJobs = new Map<string, VolumeJob>()
+
+interface StreamingVolume {
+  load(cb: () => void): void
+  loadStatus?: { loaded?: boolean; loading?: boolean }
+}
+
+/** Is the series volume built and completely filled? */
+export function volumeReady(seriesId: number): boolean {
+  const v = cache.getVolume(`cornerstoneStreamingImageVolume:series-${seriesId}`) as unknown as StreamingVolume | undefined
+  return !!v?.loadStatus?.loaded
+}
 
 /**
  * Builds (once) and caches the 3D volume of a series for MPR / coronal / sagittal views.
- * Concurrent callers for the same series share one build.
+ * `onProgress` gets one 0–100 % for the whole build: reading the files, decoding the slices and
+ * filling the volume. The promise resolves when the volume is complete, so the new view
+ * appears at 100 % in one piece. Concurrent callers for the same series share one build.
  */
-export function ensureVolume(seriesId: number, imageIds: string[], onProgress: (done: number, total: number) => void): Promise<string> {
+export function ensureVolume(seriesId: number, imageIds: string[], onProgress?: VolumeProgress): Promise<string> {
   const volumeId = `cornerstoneStreamingImageVolume:series-${seriesId}`
-  if (cache.getVolume(volumeId)) return Promise.resolve(volumeId)
-  let job = volumesInFlight.get(volumeId)
-  if (!job) {
-    job = (async () => {
-      await prefetchSeries(imageIds, onProgress)
-      if (!cache.getVolume(volumeId)) {
-        const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
-        ;(volume as unknown as { load: () => void }).load()
-      }
-      return volumeId
-    })().finally(() => volumesInFlight.delete(volumeId))
-    volumesInFlight.set(volumeId, job)
+  if (volumeReady(seriesId)) {
+    onProgress?.(100)
+    return Promise.resolve(volumeId)
   }
-  return job
+  let job = volumeJobs.get(volumeId)
+  if (!job) {
+    const j: VolumeJob = { promise: Promise.resolve(volumeId), pct: 0, listeners: new Set() }
+    const report = (value: number) => {
+      const v = Math.max(j.pct, Math.min(100, Math.floor(value)))
+      if (v === j.pct) return
+      j.pct = v
+      for (const l of j.listeners) l(v)
+    }
+    j.promise = (async () => {
+      // 1. read the files (0–30 %)
+      await prefetchSeries(imageIds, (d, t) => report((30 * d) / t))
+      // 2. decode the slices (30–95 %): Cornerstone decodes them while it creates the volume;
+      //    progress = how many of the series' images are decoded in its image cache.
+      const decoded = () => imageIds.reduce((n, id) => n + (cache.getImage(id) ? 1 : 0), 0)
+      const poll = setInterval(() => report(30 + (65 * decoded()) / imageIds.length), 150)
+      let volume: StreamingVolume
+      try {
+        volume = (cache.getVolume(volumeId) as unknown as StreamingVolume | undefined) ??
+          // A copy: for wadouri ids Cornerstone reverses the array it is given in place, which
+          // would flip the order of the tile's own image list (image 1 becoming the last image).
+          ((await volumeLoader.createAndCacheVolume(volumeId, { imageIds: [...imageIds] })) as unknown as StreamingVolume)
+      } finally {
+        clearInterval(poll)
+      }
+      report(95)
+      // 3. fill the volume (95–100 %)
+      await new Promise<void>((resolve) => {
+        let last = Date.now()
+        const total = imageIds.length
+        const onModified = (e: Event) => {
+          const d = (e as CustomEvent<{ volumeId: string; framesProcessed?: number; numberOfFrames?: number }>).detail
+          if (d?.volumeId !== volumeId) return
+          last = Date.now()
+          const n = d.numberOfFrames || total
+          report(95 + (5 * Math.min(n, d.framesProcessed ?? 0)) / n)
+          if ((d.framesProcessed ?? 0) >= n) finish()
+        }
+        const onCompleted = (e: Event) => {
+          if ((e as CustomEvent<{ volumeId: string }>).detail?.volumeId === volumeId) finish()
+        }
+        // If slices stop arriving, show what there is rather than wait forever: after 3 s when
+        // (almost) everything is there – one missing slice doesn't matter – otherwise after 30 s.
+        const watchdog = setInterval(() => {
+          const quiet = Date.now() - last
+          if (quiet > 30_000 || (j.pct >= 99 && quiet > 3_000)) finish()
+        }, 1_000)
+        let finished = false
+        function finish(): void {
+          if (finished) return
+          finished = true
+          clearInterval(watchdog)
+          eventTarget.removeEventListener(Enums.Events.IMAGE_VOLUME_MODIFIED, onModified)
+          eventTarget.removeEventListener(Enums.Events.IMAGE_VOLUME_LOADING_COMPLETED, onCompleted)
+          resolve()
+        }
+        eventTarget.addEventListener(Enums.Events.IMAGE_VOLUME_MODIFIED, onModified)
+        eventTarget.addEventListener(Enums.Events.IMAGE_VOLUME_LOADING_COMPLETED, onCompleted)
+        const status = volume.loadStatus
+        if (status?.loaded) finish()
+        else if (!status?.loading) volume.load(() => finish())
+      })
+      report(100)
+      return volumeId
+    })().finally(() => volumeJobs.delete(volumeId))
+    job = j
+    volumeJobs.set(volumeId, j)
+  }
+  if (onProgress) {
+    const listener = onProgress
+    const jj = job
+    jj.listeners.add(listener)
+    listener(jj.pct)
+    void jj.promise.finally(() => jj.listeners.delete(listener)).catch(() => {})
+  }
+  return job.promise
+}
+
+/** Which way the slices of a tile run, for the scroll bar: labels of its two ends. */
+export interface SliceAxis {
+  top: string
+  bottom: string
+  /** true when image 1 is at the bottom end (the bar is drawn anatomically: H, A or R on top). */
+  reversed: boolean
+}
+
+/**
+ * `dir` = the direction (patient coordinates, LPS) in which the image number increases.
+ * Head is always on top for axial stacks, anterior for coronal, right for sagittal.
+ */
+export function sliceAxis(dir: readonly number[] | null | undefined): SliceAxis | null {
+  if (!dir || dir.length !== 3 || dir.some((v) => !Number.isFinite(v))) return null
+  const ax = dir.map(Math.abs)
+  const len = Math.hypot(dir[0], dir[1], dir[2])
+  if (!(len > 0)) return null
+  const i = ax[2] >= ax[0] && ax[2] >= ax[1] ? 2 : ax[1] >= ax[0] ? 1 : 0
+  if (i === 2) return { top: 'H', bottom: 'F', reversed: dir[2] > 0 } // +z = head
+  if (i === 1) return { top: 'A', bottom: 'P', reversed: dir[1] < 0 } // +y = posterior
+  return { top: 'R', bottom: 'L', reversed: dir[0] < 0 } // +x = left
 }
 
 export { Enums, csTools, cache, volumeLoader, metaData }

@@ -210,8 +210,13 @@ function registerIpc(): void {
   ipcMain.handle('import:pick', async (e, kind: 'folder' | 'files') => {
     const win = senderWindow(e.sender) ?? undefined
     const opts: Electron.OpenDialogOptions = {
-      title: kind === 'folder' ? 'Import DICOM folder (CD/DVD, USB or any folder)' : 'Import DICOM files',
-      properties: kind === 'folder' ? ['openDirectory', 'multiSelections'] : ['openFile', 'multiSelections']
+      title: kind === 'folder' ? 'Import DICOM folder (CD/DVD, USB or any folder)' : 'Import DICOM files or ZIP archives',
+      properties: kind === 'folder' ? ['openDirectory', 'multiSelections'] : ['openFile', 'multiSelections'],
+      // DICOM files often have no extension, so "all files" comes first.
+      filters: kind === 'folder' ? undefined : [
+        { name: 'DICOM files and ZIP archives', extensions: ['*'] },
+        { name: 'ZIP archives', extensions: ['zip'] }
+      ]
     }
     const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
     if (res.canceled || res.filePaths.length === 0) return null
@@ -494,7 +499,7 @@ app.whenReady().then(() => {
   db = new Db(paths.dbPath)
   seedIfEmpty(db)
   handleAppScheme(join(__dirname, '../renderer'), () => paths.archiveDir)
-  importer = new Importer(db, paths.archiveDir, (p) => broadcast('import:progress', p))
+  importer = new Importer(db, paths.archiveDir, (p) => broadcast('import:progress', p), paths.tmpDir)
   speech = new SpeechService(join(paths.dataDir, 'speech'), join(__dirname, 'speechWorker.js'), (e) =>
     broadcast('speech:event', e)
   )

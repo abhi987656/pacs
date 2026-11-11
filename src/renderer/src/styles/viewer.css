@@ -279,7 +279,7 @@ body {
 }
 .ov.tr {
   top: 6px;
-  right: 22px;
+  right: 8px;
   text-align: right;
 }
 .ov.bl {
@@ -288,7 +288,7 @@ body {
 }
 .ov.br {
   bottom: 6px;
-  right: 22px;
+  right: 8px;
   text-align: right;
 }
 .ov.name {
@@ -319,7 +319,7 @@ body {
   transform: translateY(-50%);
 }
 .orient.right {
-  right: 16px;
+  right: 4px;
   top: 50%;
   transform: translateY(-50%);
 }
@@ -335,35 +335,119 @@ body {
   pointer-events: none;
   margin-top: 16px;
 }
-.scrollbar {
+/* Slice scroll bar at the left of each tile (GE / Synapse style): end labels H/F, A/P or R/L. */
+.slicebar {
   position: absolute;
-  right: 2px;
-  top: 30px;
-  bottom: 30px;
-  width: 10px;
-  background: rgba(255, 255, 255, 0.07);
-  border-radius: 5px;
-  z-index: 6;
+  left: 20px;
+  top: 27%;
+  bottom: 27%;
+  width: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 7;
   cursor: pointer;
+  user-select: none;
 }
-.scrollbar-thumb {
+.slicebar-end {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  background: rgba(46, 96, 90, 0.9);
+  border: 1px solid rgba(205, 232, 226, 0.55);
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+.slicebar-track {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  margin: 4px 0;
+  min-height: 30px;
+}
+.slicebar-line {
   position: absolute;
-  left: 1px;
-  right: 1px;
-  min-height: 10px;
-  background: #8a8a92;
-  border-radius: 4px;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(236, 236, 240, 0.85);
+  box-shadow: 0 0 2px #000;
+}
+.slicebar-thumb {
+  position: absolute;
+  left: 50%;
+  width: 26px;
+  height: 13px;
+  transform: translate(-50%, -50%);
+  background: rgba(78, 112, 107, 0.96);
+  border: 1px solid rgba(220, 236, 232, 0.75);
+  border-radius: 3px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+.slicebar-thumb::before {
+  /* grip */
+  content: '';
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  top: 3px;
+  height: 3px;
+  border-top: 1px solid #e6efed;
+  border-bottom: 1px solid #e6efed;
+}
+.slicebar:hover .slicebar-thumb,
+.slicebar.dragging .slicebar-thumb {
+  background: rgba(63, 155, 98, 0.98);
+}
+.slicebar-pos {
+  position: absolute;
+  left: 30px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(10, 10, 12, 0.85);
+  color: #fff;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .v-loading {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  background: rgba(10, 10, 12, 0.88);
-  padding: 10px 16px;
-  border-radius: 5px;
+  background: rgba(10, 10, 12, 0.9);
+  padding: 12px 18px;
+  border-radius: 6px;
   z-index: 20;
   color: #fff;
+  min-width: 220px;
+  text-align: center;
+  border: 1px solid #2c2c31;
+}
+.v-loading-text b {
+  color: #7fd09a;
+  font-size: 15px;
+}
+.v-loading-bar {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 3px;
+  background: #26262b;
+  overflow: hidden;
+}
+.v-loading-bar > div {
+  height: 100%;
+  background: var(--green, #3f9b62);
+  transition: width 0.15s;
 }
 
 /* ------------------------------------------- welcome / help */

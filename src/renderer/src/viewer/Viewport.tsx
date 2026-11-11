@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Enums, utilities as csUtils } from '@cornerstonejs/core'
 import type { Types } from '@cornerstonejs/core'
 import * as csTools from '@cornerstonejs/tools'
@@ -17,14 +17,21 @@ import {
   orientationMarkers,
   panBy,
   RENDERING_ENGINE_ID,
+  sliceAxis,
   STACK_TOOLGROUP,
   str,
   voiMultiplier,
   zoomBy
 } from './cs'
-import type { DragMode } from './cs'
+import type { DragMode, SliceAxis } from './cs'
 
 export type SlotKind = 'stack' | 'axial' | 'sagittal' | 'coronal'
+
+/** A tile that is still being prepared (e.g. the volume for a coronal view): text and 0–100 %. */
+export interface TileLoading {
+  text: string
+  pct: number | null
+}
 
 export interface SlotInfo {
   id: string
@@ -44,6 +51,8 @@ interface OverlayState {
   zoom: number
   markers: { top: string; bottom: string; left: string; right: string } | null
   imageId: string | undefined
+  /** Reformatted views: the direction in which the slice number increases (camera normal). */
+  dir: [number, number, number] | null
 }
 
 interface Props {
@@ -55,7 +64,7 @@ interface Props {
   seriesLabel: string
   images: SeriesImages | null
   showOverlay: boolean
-  loadingText: string | null
+  loading: TileLoading | null
   onActivate: () => void
   onDoubleClick: () => void
   onDropSeries: (seriesId: number, studyId: number) => void
@@ -78,7 +87,7 @@ const ORIENT: Record<Exclude<SlotKind, 'stack'>, Enums.OrientationAxis> = {
 
 export function Viewport(p: Props) {
   const elRef = useRef<HTMLDivElement>(null)
-  const [ov, setOv] = useState<OverlayState>({ index: 0, total: 0, ww: null, wc: null, zoom: 1, markers: null, imageId: undefined })
+  const [ov, setOv] = useState<OverlayState>({ index: 0, total: 0, ww: null, wc: null, zoom: 1, markers: null, imageId: undefined, dir: null })
   const [dropping, setDropping] = useState(false)
   const lastIndex = useRef(0)
   const raf = useRef(0)
@@ -155,6 +164,7 @@ export function Viewport(p: Props) {
     p.onActivate()
     const el = elRef.current
     if (!el) return
+    if ((e.target as HTMLElement).closest?.('.slicebar')) return // the scroll bar handles its own mouse
     if (e.button === 1) {
       const t = Date.now()
       if (t - lastMiddle.current < 350) {
@@ -216,6 +226,7 @@ export function Viewport(p: Props) {
         let index = 0
         let total = 0
         let imageId: string | undefined
+        let dir: [number, number, number] | null = null
         if (isStack) {
           const sv = vp as Types.IStackViewport
           index = sv.getCurrentImageIdIndex()
@@ -225,6 +236,9 @@ export function Viewport(p: Props) {
           const vv = vp as Types.IVolumeViewport
           index = vv.getSliceIndex?.() ?? 0
           total = vv.getNumberOfSlices?.() ?? 0
+          // The slice number of a volume view grows along the camera's view-plane normal.
+          const n = vv.getCamera?.().viewPlaneNormal
+          if (n) dir = [n[0], n[1], n[2]]
         }
         const voi = getVoi(vp)
         let zoom = 1
@@ -233,7 +247,7 @@ export function Viewport(p: Props) {
         } catch {
           /* not ready */
         }
-        setOv({ index, total, ww: voi?.ww ?? null, wc: voi?.wc ?? null, zoom, markers: orientationMarkers(vp), imageId })
+        setOv({ index, total, ww: voi?.ww ?? null, wc: voi?.wc ?? null, zoom, markers: orientationMarkers(vp), imageId, dir })
       })
     }
     const onNewImage = (e: Event) => {
@@ -297,22 +311,23 @@ export function Viewport(p: Props) {
     }
   }, [id, kind, p.images])
 
-  // Coronal / sagittal view of the series in this tile (keys 3 and ?): load the series volume.
-  const [volLoading, setVolLoading] = useState<string | null>(null)
+  // Coronal / sagittal view of the series in this tile (keys 3 and ?): build the series volume
+  // (shown as one percentage); the view appears when it is complete.
+  const [volLoading, setVolLoading] = useState<TileLoading | null>(null)
   useEffect(() => {
     if (kind === 'stack' || id.startsWith('mpr-')) return
     const seriesId = p.slot.seriesId
     const imgs = p.images
     if (seriesId == null || !imgs || imgs.imageIds.length === 0) return
     let cancelled = false
+    const label = `Building ${kind} view`
     void (async () => {
       try {
-        setVolLoading('Loading images…')
-        const volumeId = await ensureVolume(seriesId, imgs.imageIds, (d, t) => {
-          if (!cancelled) setVolLoading(`Loading images ${Math.round((100 * d) / t)}%`)
+        setVolLoading({ text: label, pct: 0 })
+        const volumeId = await ensureVolume(seriesId, imgs.imageIds, (pct) => {
+          if (!cancelled) setVolLoading({ text: label, pct })
         })
         if (cancelled) return
-        setVolLoading(`Building ${kind} view…`)
         const vp = getEngine().getViewport(id) as Types.IVolumeViewport | undefined
         if (!vp) return
         await vp.setVolumes([{ volumeId }])
@@ -322,7 +337,7 @@ export function Viewport(p: Props) {
         setVolLoading(null)
       } catch (e) {
         console.error(e)
-        if (!cancelled) setVolLoading(`Could not build the ${kind} view: ${(e as Error).message}`)
+        if (!cancelled) setVolLoading({ text: `Could not build the ${kind} view: ${(e as Error).message}`, pct: null })
       }
     })()
     return () => {
@@ -332,15 +347,27 @@ export function Viewport(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, kind, p.images, p.slot.seriesId])
 
-  // Scrollbar drag.
-  const scrollTo = (clientY: number, track: HTMLDivElement) => {
-    const r = track.getBoundingClientRect()
-    const frac = Math.min(1, Math.max(0, (clientY - r.top) / r.height))
+  // Scroll bar: which way the slices run (H/F, A/P or R/L at its ends).
+  const stackDir = useMemo(() => {
+    const imgs = p.images
+    if (!imgs?.normal) return null
+    const pos = imgs.positions.filter((x): x is number => x != null)
+    if (pos.length < 2 || pos[0] === pos[pos.length - 1]) return null
+    const sign = Math.sign(pos[pos.length - 1] - pos[0])
+    return [imgs.normal[0] * sign, imgs.normal[1] * sign, imgs.normal[2] * sign]
+  }, [p.images])
+  const axis = sliceAxis(kind === 'stack' ? stackDir : ov.dir)
+
+  const seek = (target: number) => {
     const vp = getEngine().getViewport(id)
     if (!vp || ov.total < 2) return
-    const target = Math.round(frac * (ov.total - 1))
-    if (kind === 'stack') void (vp as Types.IStackViewport).setImageIdIndex(target)
-    else void csUtils.jumpToSlice(vp.element as HTMLDivElement, { imageIndex: target })
+    const i = Math.min(ov.total - 1, Math.max(0, target))
+    if (kind === 'stack') void (vp as Types.IStackViewport).setImageIdIndex(i)
+    else void csUtils.jumpToSlice(vp.element as HTMLDivElement, { imageIndex: i })
+  }
+  const step = (delta: number) => {
+    const vp = getEngine().getViewport(id)
+    if (vp && delta) csUtils.scroll(vp as Types.IStackViewport, { delta })
   }
 
   const nat = getNatural(ov.imageId)
@@ -383,7 +410,7 @@ export function Viewport(p: Props) {
     >
       <div ref={elRef} className="v-element" />
       {!hasImages && <div className="v-empty">Drag a series here, or click a thumbnail above</div>}
-      {(p.loadingText || volLoading) && <div className="v-loading">{p.loadingText || volLoading}</div>}
+      {(p.loading || volLoading) && <LoadingBox loading={(p.loading ?? volLoading)!} />}
       {kind !== 'stack' && <div className="mpr-label">{kind.toUpperCase()}</div>}
       {p.scrollLinked && hasImages && <div className="link-badge" title="Linked scrolling (S)">LINK</div>}
       {p.showOverlay && hasImages && s && (
@@ -450,32 +477,86 @@ export function Viewport(p: Props) {
           <div className="orient right">{ov.markers.right}</div>
         </>
       )}
-      {hasImages && ov.total > 1 && (
-        <div
-          className="scrollbar"
-          title="Drag to scroll through images"
-          onMouseDown={(e) => {
-            e.stopPropagation()
-            const track = e.currentTarget
-            scrollTo(e.clientY, track)
-            const move = (ev: MouseEvent) => scrollTo(ev.clientY, track)
-            const up = () => {
-              window.removeEventListener('mousemove', move)
-              window.removeEventListener('mouseup', up)
-            }
-            window.addEventListener('mousemove', move)
-            window.addEventListener('mouseup', up)
-          }}
-        >
-          <div
-            className="scrollbar-thumb"
-            style={{
-              top: `${(ov.index / Math.max(1, ov.total)) * 100}%`,
-              height: `${Math.max(100 / ov.total, 2)}%`
-            }}
-          />
+      {hasImages && ov.total > 1 && !p.loading && !volLoading && (
+        <SliceBar index={ov.index} total={ov.total} axis={axis} onSeek={seek} onStep={step} />
+      )}
+    </div>
+  )
+}
+
+function LoadingBox({ loading }: { loading: TileLoading }) {
+  return (
+    <div className="v-loading">
+      <div className="v-loading-text">
+        {loading.text}
+        {loading.pct != null && <b> {loading.pct}%</b>}
+      </div>
+      {loading.pct != null && (
+        <div className="v-loading-bar">
+          <div style={{ width: `${loading.pct}%` }} />
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Slice scroll bar at the side of the tile (GE/Synapse style): the ends say where the slices
+ * go (H/F, A/P or R/L); click or drag the handle to move through the images, wheel = ±1 image.
+ */
+function SliceBar(p: { index: number; total: number; axis: SliceAxis | null; onSeek: (i: number) => void; onStep: (d: number) => void }) {
+  const trackRef = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState(false)
+  const last = p.total - 1
+  const frac = last > 0 ? p.index / last : 0
+  const t = p.axis?.reversed ? 1 - frac : frac
+  const indexAt = (clientY: number) => {
+    const r = trackRef.current?.getBoundingClientRect()
+    if (!r || r.height <= 0) return p.index
+    const f = Math.min(1, Math.max(0, (clientY - r.top) / r.height))
+    return Math.round((p.axis?.reversed ? 1 - f : f) * last)
+  }
+  const names: Record<string, string> = { H: 'head', F: 'feet', A: 'front', P: 'back', R: 'right', L: 'left' }
+  const title = p.axis
+    ? `Drag to scroll through the images (${p.axis.top} = ${names[p.axis.top]}, ${p.axis.bottom} = ${names[p.axis.bottom]})`
+    : 'Drag to scroll through the images'
+  return (
+    <div
+      className={`slicebar ${dragging ? 'dragging' : ''}`}
+      title={title}
+      onMouseDown={(e) => {
+        if (e.button !== 0) return
+        e.preventDefault()
+        e.stopPropagation()
+        p.onSeek(indexAt(e.clientY))
+        setDragging(true)
+        const move = (ev: MouseEvent) => p.onSeek(indexAt(ev.clientY))
+        const up = () => {
+          setDragging(false)
+          window.removeEventListener('mousemove', move)
+          window.removeEventListener('mouseup', up)
+        }
+        window.addEventListener('mousemove', move)
+        window.addEventListener('mouseup', up)
+      }}
+      onWheel={(e) => {
+        e.stopPropagation()
+        p.onStep(Math.sign(e.deltaY)) // same as the wheel over the image
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      {p.axis && <div className="slicebar-end">{p.axis.top}</div>}
+      <div className="slicebar-track" ref={trackRef}>
+        <div className="slicebar-line" />
+        <div className="slicebar-thumb" style={{ top: `${t * 100}%` }}>
+          {dragging && (
+            <span className="slicebar-pos">
+              {p.index + 1}/{p.total}
+            </span>
+          )}
+        </div>
+      </div>
+      {p.axis && <div className="slicebar-end">{p.axis.bottom}</div>}
     </div>
   )
 }

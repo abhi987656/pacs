@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto'
-import { copyFile, mkdir, readdir, stat } from 'node:fs/promises'
-import { join, resolve, sep } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { copyFile, mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import type { ImportProgress, ImportResult } from '@shared/types'
 import type { Db, SeriesInsert, StudyInsert } from './db'
 import { DICOMDIR_SOP_CLASS, isLikelyNonDicom, readDicomHeader } from './dicom'
+import { unzipTo } from './unzip'
 
 const short = (s: string, n: number): string => createHash('sha1').update(s).digest('hex').slice(0, n)
 
@@ -22,7 +23,9 @@ export class Importer {
   constructor(
     private readonly db: Db,
     private readonly archiveDir: string,
-    private readonly onProgress: (p: ImportProgress) => void
+    private readonly onProgress: (p: ImportProgress) => void,
+    /** Where ZIP archives are unpacked during an import (emptied afterwards). */
+    private readonly tmpDir: string = join(dirname(archiveDir), 'tmp')
   ) {}
 
   get isRunning(): boolean {
@@ -61,11 +64,38 @@ export class Importer {
     emit(true)
 
     const touchedStudies = new Set<number>()
+    const unzipDirs: string[] = []
+    const zipProblems: string[] = []
+    let otherArchives = 0
     try {
-      // 1. Collect candidate files.
+      // 1. Collect candidate files (ZIP archives are unpacked to a temporary folder first).
       const files: string[] = []
       const archiveRoot = resolve(this.archiveDir)
-      const walk = async (p: string): Promise<void> => {
+      const unpack = async (zipPath: string, depth: number): Promise<void> => {
+        if (depth >= 3) return // a ZIP inside a ZIP inside a ZIP: stop there
+        const name = basename(zipPath)
+        const dir = join(this.tmpDir, `unzip-${randomUUID()}`)
+        unzipDirs.push(dir)
+        progress.phase = 'unpacking'
+        progress.zip = { name, done: 0, total: 0 }
+        progress.message = `Unpacking ${name}…`
+        emit(true)
+        try {
+          await unzipTo(zipPath, dir, (u) => {
+            progress.zip = { name, done: u.done, total: u.total }
+            emit()
+          }, () => this.cancelled)
+        } catch (e) {
+          zipProblems.push((e as Error).message)
+          return
+        } finally {
+          progress.zip = null
+          progress.phase = 'scanning'
+          emit(true)
+        }
+        await walk(dir, depth + 1)
+      }
+      const walk = async (p: string, depth = 0): Promise<void> => {
         if (this.cancelled) return
         let st
         try {
@@ -84,10 +114,13 @@ export class Importer {
           }
           for (const e of entries) {
             if (e.name.startsWith('.') || e.name === '$RECYCLE.BIN' || e.name === 'System Volume Information') continue
-            await walk(join(p, e.name))
+            await walk(join(p, e.name), depth)
           }
         } else if (st.isFile()) {
-          if (!isLikelyNonDicom(p)) {
+          const lower = p.toLowerCase()
+          if (lower.endsWith('.zip')) await unpack(p, depth)
+          else if (lower.endsWith('.rar') || lower.endsWith('.7z')) otherArchives++
+          else if (!isLikelyNonDicom(p)) {
             files.push(p)
             progress.filesFound = files.length
             emit()
@@ -241,12 +274,17 @@ export class Importer {
       progress.running = false
       progress.studiesTouched = touchedStudies.size
       progress.currentFile = ''
+      const archiveNote =
+        (zipProblems.length ? ` ${zipProblems.join(' ')}` : '') +
+        (otherArchives ? ` ${otherArchives} RAR/7-Zip archive(s) skipped – extract them first, then import the folder.` : '')
+      if (zipProblems.length && !progress.imported) progress.errors++
       progress.message = this.cancelled
         ? `Import cancelled. ${progress.imported} image(s) imported.`
         : `Imported ${progress.imported} image(s) in ${touchedStudies.size} study(ies).` +
           (progress.duplicates ? ` ${progress.duplicates} already in archive.` : '') +
           (progress.skipped ? ` ${progress.skipped} non-DICOM file(s) skipped.` : '') +
-          (progress.errors ? ` ${progress.errors} error(s).` : '')
+          (progress.errors ? ` ${progress.errors} error(s).` : '') +
+          archiveNote
       emit(true)
       return { ...progress, studyIds: [...touchedStudies] }
     } catch (e) {
@@ -256,6 +294,7 @@ export class Importer {
       emit(true)
       return { ...progress, studyIds: [...touchedStudies] }
     } finally {
+      for (const d of unzipDirs) await rm(d, { recursive: true, force: true }).catch(() => {})
       this.running = false
     }
   }

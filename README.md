@@ -15,8 +15,10 @@ to another Personal PACS user anywhere on the internet, straight from your PC, e
 ## Features
 
 **Worklist**
-- Import from a CD/DVD drive, USB stick, folder or individual files, or drag them onto the window.
-  Patient CDs with a `DICOMDIR` and files without extensions work.
+- Import from a CD/DVD drive, USB stick, folder, individual files or **ZIP archives** (for example a
+  study downloaded from a PACS web portal or sent by e-mail), or drag them onto the window.
+  Patient CDs with a `DICOMDIR`, files without extensions and ZIPs inside ZIPs work. Password-protected
+  ZIPs and RAR/7-Zip archives have to be extracted first (the import says so).
 - Images are copied into a local archive, so the CD can be removed. Duplicates are skipped.
 - Search by name, patient ID, accession or study. Filter by modality, report status and date.
   Search inside report text, which is handy for teaching files.
@@ -108,7 +110,14 @@ a second monitor if you have one)
 - **Compare with prior** (key **C**): current and previous study side by side, with linked scrolling.
 - **Coronal / sagittal in the same tile**: **3** shows the coronal view (3 again = back to the original
   axial images), **?** shows the sagittal view (? again = coronal). Window/level is kept.
-- **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs.
+- **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs. While the volume
+  is built for MPR or for the **3** / **?** views, the tile shows the progress in % (e.g. "Building
+  coronal view 45%"); the new view appears complete at 100%.
+- **Scroll bar** on the left of each tile, as on GE / Synapse workstations: its ends show which way the
+  slices run (**H**/**F** for axial, **A**/**P** for coronal, **R**/**L** for sagittal). Drag the
+  handle or click the bar to move through the images; the image number shows while dragging.
+- **Full screen** (**F11**, the toolbar button or the right-click menu): the viewer fills the screen
+  and the series strip hides (Alt+E shows it again).
 - Cine, invert, rotate, flip and magnifier.
 - Compressed DICOM: JPEG, JPEG-LS, JPEG 2000, HTJ2K, RLE and JPEG-XL.
 
@@ -180,7 +189,8 @@ How it connects, and what is protected:
 
 1. Open **Settings** (gear icon). Enter your name, qualification and registration number. Add your
    signature image and the letterhead (hospital/clinic name, address and logo).
-2. In the **Worklist**, click **Import CD / Folder** and choose the CD drive or folder.
+2. In the **Worklist**, click **Import CD / Folder** and choose the CD drive or folder (or
+   **Import Files / ZIP** for a ZIP archive).
 3. Double-click a study. The report opens and the images open in the viewer window.
 4. Choose a template, type or use macros, press **B** in the viewer for key images, then **Sign off**
    and **PDF**, **Word** or **Print**.
@@ -193,6 +203,7 @@ How it connects, and what is protected:
 | Hold left + click right | Switch the drag between window/level → zoom → pan |
 | Right click | Image tools menu |
 | Wheel / middle-drag | Scroll through images |
+| Scroll bar on the left of the tile | Drag or click to move through the images (H/F, A/P, R/L ends) |
 | Double-click the mouse wheel | Link window/level + zoom between tiles |
 | Alt+drag / Alt+Ctrl+drag / Alt+Shift+drag | Window/level / zoom / pan |
 | Shift+drag / Ctrl+drag | Move / copy a series to another tile |
@@ -215,6 +226,7 @@ How it connects, and what is protected:
 | Alt+I / Alt+N / Alt+R / Alt+E | Study info / notes / report / series picker |
 | Ctrl+C | Copy the image to the clipboard |
 | F4 | Dictation on/off |
+| F11 | Full screen on/off |
 
 ## Your data
 

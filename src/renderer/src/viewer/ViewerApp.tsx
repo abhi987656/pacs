@@ -22,8 +22,10 @@ import {
   Link2,
   Lock,
   LockOpen,
+  Maximize,
   Mic,
   MicOff,
+  Minimize,
   PanelTop,
   Pause,
   Play,
@@ -65,7 +67,7 @@ import type { DragMode, ToolName } from './cs'
 import { ContextMenu } from './ContextMenu'
 import type { MenuItem } from './ContextMenu'
 import { Viewport } from './Viewport'
-import type { SlotInfo } from './Viewport'
+import type { SlotInfo, TileLoading } from './Viewport'
 
 const api = window.api
 const MPR_IDS = ['mpr-axial', 'mpr-sagittal', 'mpr-coronal']
@@ -201,6 +203,7 @@ const HELP: [string, string][] = [
   ['Alt+S / Alt+A', 'Next / previous series'],
   ['Alt+I / Alt+N / Alt+R / Alt+E', 'Study info / notes / report / series picker'],
   ['Ctrl+C', 'Copy the image to the clipboard'],
+  ['F11', 'Full screen on/off (the series strip hides; Alt+E shows it)'],
   ['F4', 'Dictation on/off (types into the report)'],
   ['Tab / double-click', 'Next tile / maximise tile']
 ]
@@ -232,7 +235,9 @@ export function ViewerApp() {
   const [cine, setCine] = useState(false)
   const [fps, setFps] = useState(10)
   const [mpr, setMpr] = useState<MprState | null>(null)
-  const [mprLoading, setMprLoading] = useState<string | null>(null)
+  const [mprLoading, setMprLoading] = useState<TileLoading | null>(null)
+  const [fullScreen, setFullScreen] = useState(false)
+  const topBeforeFullScreen = useRef(true)
   const [slab, setSlab] = useState(0)
   const [help, setHelp] = useState(false)
   const [info, setInfo] = useState(false)
@@ -548,12 +553,11 @@ export function ViewerApp() {
     void (async () => {
       try {
         const imgs = imagesRef.current[mpr.seriesId]
-        setMprLoading('Loading images…')
-        const volumeId = await ensureVolume(mpr.seriesId, imgs.imageIds, (d, t) => {
-          if (!cancelled) setMprLoading(`Loading images ${Math.round((100 * d) / t)}%`)
+        setMprLoading({ text: 'Building MPR', pct: 0 })
+        const volumeId = await ensureVolume(mpr.seriesId, imgs.imageIds, (pct) => {
+          if (!cancelled) setMprLoading({ text: 'Building MPR', pct })
         })
         if (cancelled) return
-        setMprLoading('Building volume…')
         await setVolumesForViewports(getEngine(), [{ volumeId }], MPR_IDS)
         getEngine().renderViewports(MPR_IDS)
         setMprLoading(null)
@@ -909,6 +913,17 @@ export function ViewerApp() {
     ui.toast('Notes saved (shown in the report’s Clinical Details)', 'success')
   }
 
+  // ------------------------------------------------------------ full screen (F11)
+  const toggleFullScreen = () => {
+    const next = !fullScreen
+    setFullScreen(next)
+    void api.setFullScreen(next)
+    if (next) {
+      topBeforeFullScreen.current = showTop
+      setShowTop(false) // all the room for the images; Alt+E brings the series strip back
+    } else setShowTop(topBeforeFullScreen.current)
+  }
+
   // ------------------------------------------------------------ keyboard (Synapse hot keys)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -936,6 +951,7 @@ export function ViewerApp() {
 
       if (k === 'F4') void api.toggleDictation()
       else if (k === 'F5') transform('reset')
+      else if (k === 'F11') toggleFullScreen()
       else if (e.ctrlKey && !e.altKey && lower === 'c') void copyImage()
       else if (e.altKey && lower === 'c') compareStep(e.shiftKey ? -1 : 1)
       else if (e.altKey && lower === 'x') void closeComparison()
@@ -1114,6 +1130,7 @@ export function ViewerApp() {
     { label: 'Cine', hint: 'N', checked: cine, onClick: toggleCine },
     { label: 'Compare with prior', hint: 'Alt+C', disabled: studies.length < 2, onClick: () => compareStep(1) },
     { label: 'Reset image', hint: 'F5', onClick: () => transform('reset') },
+    { label: 'Full screen', hint: 'F11', checked: fullScreen, onClick: toggleFullScreen },
     'sep',
     { label: mpr ? 'Exit MPR View' : 'MPR View…', hint: 'M', onClick: () => void (mpr ? exitMpr() : enterMpr()) },
     {
@@ -1346,6 +1363,9 @@ export function ViewerApp() {
         <VBtn title="Open the report for this study (Alt+R)" onClick={() => currentStudyId != null && void api.openReportFor(currentStudyId)} disabled={currentStudyId == null}>
           <FileText size={17} /> Report
         </VBtn>
+        <VBtn title={fullScreen ? 'Leave full screen (F11)' : 'Full screen (F11)'} on={fullScreen} onClick={toggleFullScreen}>
+          {fullScreen ? <Minimize size={17} /> : <Maximize size={17} />}
+        </VBtn>
       </div>
 
       <div
@@ -1372,7 +1392,7 @@ export function ViewerApp() {
                 showOverlay={overlay}
                 showAnnotations={showAnn}
                 scrollLinked={slots.length > 1 && isLinked(slot.id)}
-                loadingText={slot.id.startsWith('mpr-') ? mprLoading : null}
+                loading={slot.id.startsWith('mpr-') ? mprLoading : null}
                 dragMode={isDragMode(tool) ? tool : null}
                 onCycleDragMode={cycleDragMode}
                 onContextMenu={(x, y) => {

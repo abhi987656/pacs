@@ -178,8 +178,8 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
           <button className="btn btn-green" onClick={() => void startImport('folder')} disabled={running}>
             <Disc size={16} /> Import CD / Folder
           </button>
-          <button className="btn" onClick={() => void startImport('files')} disabled={running}>
-            <Files size={16} /> Import Files
+          <button className="btn" title="Import DICOM files or ZIP archives (e.g. a study downloaded from a PACS portal)" onClick={() => void startImport('files')} disabled={running}>
+            <Files size={16} /> Import Files / ZIP
           </button>
         </div>
       </header>
@@ -306,8 +306,8 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
             <FolderOpen size={44} />
             <p>No studies found.</p>
             <p className="muted">
-              Click <b>Import CD / Folder</b> and choose a CD/DVD drive, USB stick or folder with DICOM files – or drag
-              files and folders onto this window.
+              Click <b>Import CD / Folder</b> and choose a CD/DVD drive, USB stick or folder with DICOM files, or{' '}
+              <b>Import Files / ZIP</b> for a ZIP archive – or drag files, folders and ZIP files onto this window.
             </p>
           </div>
         )}
@@ -336,7 +336,13 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
       {progress && (progress.running || progress.phase !== 'scanning') && (
         <div className={`import-card ${progress.running ? '' : 'done'}`}>
           <div className="import-title">
-            {progress.running ? (progress.phase === 'scanning' ? 'Scanning…' : 'Importing…') : 'Import finished'}
+            {progress.running
+              ? progress.phase === 'unpacking'
+                ? 'Unpacking ZIP…'
+                : progress.phase === 'scanning'
+                  ? 'Scanning…'
+                  : 'Importing…'
+              : 'Import finished'}
             {!progress.running && (
               <button className="icon-btn" onClick={() => setProgress(null)} title="Close">
                 <X size={14} />
@@ -348,12 +354,19 @@ export function Worklist({ filter, onFilterChange, onOrderChange, onOpenReport, 
               <div style={{ width: `${progress.filesFound ? (100 * progress.processed) / progress.filesFound : 0}%` }} />
             </div>
           )}
+          {progress.running && progress.phase === 'unpacking' && progress.zip && (
+            <div className="progress">
+              <div style={{ width: `${progress.zip.total ? (100 * progress.zip.done) / progress.zip.total : 0}%` }} />
+            </div>
+          )}
           <div className="import-stats">
             {progress.running ? (
               <>
-                {progress.phase === 'scanning'
-                  ? `${progress.filesFound} files found`
-                  : `${progress.processed} / ${progress.filesFound} files · ${progress.imported} images imported`}
+                {progress.phase === 'unpacking' && progress.zip
+                  ? `${progress.zip.name}: ${progress.zip.done} / ${progress.zip.total} files`
+                  : progress.phase === 'scanning'
+                    ? `${progress.filesFound} files found`
+                    : `${progress.processed} / ${progress.filesFound} files · ${progress.imported} images imported`}
               </>
             ) : (
               progress.message
