@@ -704,3 +704,12 @@ body.dragging-copy * {
 .spine-head button {
   cursor: pointer;
 }
+.v-welcome p {
+  max-width: 760px;
+  text-align: center;
+  line-height: 1.5;
+}
+.v-welcome .v-gpu {
+  font-size: 12px;
+  color: #5d5d66;
+}

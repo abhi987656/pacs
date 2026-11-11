@@ -4,6 +4,7 @@ import {
   Enums,
   eventTarget,
   getEnabledElement,
+  getRenderingCapabilities,
   init as csInit,
   metaData,
   RenderingEngine,
@@ -169,7 +170,10 @@ export function initCornerstone(): Promise<void> {
 const askText = (done: (text: string) => void) => void textPrompt('Annotation text').then((v) => done(v ?? ''))
 
 async function doInit(): Promise<void> {
-  csInit()
+  // Volumes (MPR, coronal, sagittal) go to the graphics card as one 3D texture. Keep it at
+  // 2 bytes per voxel: 16-bit textures where the card has them, otherwise half floats instead
+  // of 4-byte floats (exact for CT numbers up to ±2048, 2 HU steps above).
+  csInit({ rendering: { preferSizeOverAccuracy: !gpu().norm16 } } as Parameters<typeof csInit>[0])
   dicomLoaderInit({
     maxWebWorkers: Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1)),
     wasmBasePath: '/wasm'
@@ -523,31 +527,147 @@ export async function prefetchSeries(imageIds: string[], onProgress: (done: numb
   await Promise.all(Array.from({ length: 8 }, worker))
 }
 
-const volumesInFlight = new Map<string, Promise<string>>()
+// ------------------------------------------------------------------ volumes and graphics memory
+
+export interface GpuInfo {
+  renderer: string
+  kind: 'software' | 'integrated' | 'dedicated'
+  norm16: boolean
+}
+
+let gpuCache: GpuInfo | null = null
+
+/** What graphics the viewer runs on (from WebGL; read once). */
+export function gpu(): GpuInfo {
+  if (gpuCache) return gpuCache
+  let renderer = ''
+  let norm16 = false
+  let software = false
+  try {
+    const caps = getRenderingCapabilities()
+    renderer = caps.renderer || ''
+    norm16 = !!(caps.norm16 && caps.norm16Linear)
+    software = caps.softwareRasterizer || !caps.webgl
+  } catch {
+    /* no WebGL */
+  }
+  const r = renderer.toLowerCase()
+  const integrated =
+    (/intel/.test(r) && !/\barc\b/.test(r)) || /radeon\(tm\) graphics|radeon graphics|radeon vega|vega \d|apple m\d/.test(r)
+  gpuCache = { renderer, kind: software ? 'software' : integrated ? 'integrated' : 'dedicated', norm16 }
+  return gpuCache
+}
+
+const BUDGET_KEY = 'pacs:volumeBudgetMB'
+const DEFAULT_BUDGET_MB: Record<GpuInfo['kind'], number> = { software: 256, integrated: 512, dedicated: 1024 }
 
 /**
- * Builds (once) and caches the 3D volume of a series for MPR / coronal / sagittal views.
- * Concurrent callers for the same series share one build. The view is shown straight away and
- * the slices stream into it, so the graphics card receives them a few at a time.
+ * How much graphics memory one volume may take. Built-in graphics share the computer's RAM and
+ * Windows resets the card when it runs out, so they get less; the limit is halved (and
+ * remembered for this card) each time the card is reset while a volume is shown.
  */
-export function ensureVolume(seriesId: number, imageIds: string[]): Promise<string> {
-  const volumeId = `cornerstoneStreamingImageVolume:series-${seriesId}`
-  if (cache.getVolume(volumeId)) return Promise.resolve(volumeId)
-  let job = volumesInFlight.get(volumeId)
+export function volumeBudgetMB(): number {
+  const g = gpu()
+  let mb = DEFAULT_BUDGET_MB[g.kind]
+  try {
+    const saved = JSON.parse(localStorage.getItem(BUDGET_KEY) || 'null') as { renderer?: string; mb?: number } | null
+    if (saved?.renderer === g.renderer && typeof saved.mb === 'number' && saved.mb > 0) mb = Math.min(mb, saved.mb)
+  } catch {
+    /* storage blocked */
+  }
+  return mb
+}
+
+/** Largest volume (MB on the graphics card) built since this window opened. */
+let largestVolumeMB = 0
+
+/** The card was reset while volumes were shown: use at most half as much from now on. */
+export function lowerVolumeBudget(): boolean {
+  if (!largestVolumeMB) return false
+  const mb = Math.max(64, Math.floor(Math.min(largestVolumeMB, volumeBudgetMB()) / 2))
+  try {
+    localStorage.setItem(BUDGET_KEY, JSON.stringify({ renderer: gpu().renderer, mb }))
+  } catch {
+    /* storage blocked */
+  }
+  return true
+}
+
+export interface VolumePlan {
+  volumeId: string
+  /** 1 = every image; 2 = every 2nd image, … (only for series too big for the graphics card). */
+  step: number
+  /** Images in the series / in the volume. */
+  total: number
+  used: number
+}
+
+const MAX_3D_SLICES = 2048 // largest 3D texture depth on Windows (Direct3D 11)
+
+function planVolume(seriesId: number, imageIds: string[]): VolumePlan & { imageIds: string[]; mb: number } {
+  const first = getNatural(imageIds[0])
+  const rows = Number(first?.Rows) || 512
+  const cols = Number(first?.Columns) || 512
+  const sliceMB = (rows * cols * 2) / 2 ** 20
+  const fit = Math.max(3, Math.min(MAX_3D_SLICES, Math.floor(volumeBudgetMB() / sliceMB)))
+  let step = Math.max(1, Math.ceil(imageIds.length / fit))
+  while (step > 1 && Math.ceil(imageIds.length / step) < 3) step--
+  const ids = step > 1 ? imageIds.filter((_, i) => i % step === 0) : [...imageIds]
+  return {
+    volumeId: `cornerstoneStreamingImageVolume:series-${seriesId}${step > 1 ? `-every${step}` : ''}`,
+    imageIds: ids,
+    step,
+    total: imageIds.length,
+    used: ids.length,
+    mb: ids.length * sliceMB
+  }
+}
+
+const volumesInFlight = new Map<number, Promise<VolumePlan>>()
+/** Volumes this window built: volume id -> series. */
+const builtVolumes = new Map<string, number>()
+
+/**
+ * Builds (once) and caches the 3D volume of a series for MPR / coronal / sagittal views, sized to
+ * fit the graphics card. Concurrent callers for the same series share one build. The view is
+ * shown straight away and the slices stream into it.
+ */
+export function ensureVolume(seriesId: number, imageIds: string[]): Promise<VolumePlan> {
+  let job = volumesInFlight.get(seriesId)
   if (!job) {
     job = (async () => {
-      await prefetchSeries(imageIds, () => {})
-      if (!cache.getVolume(volumeId)) {
-        // A copy: for wadouri ids Cornerstone reverses the array it is given in place, which
-        // would flip the order of the tile's own image list (image 1 becoming the last image).
-        const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds: [...imageIds] })
-        ;(volume as unknown as { load: () => void }).load()
+      await prefetchSeries(imageIds.slice(0, 1), () => {})
+      const plan = planVolume(seriesId, imageIds)
+      if (!cache.getVolume(plan.volumeId)) {
+        await prefetchSeries(plan.imageIds, () => {})
+        if (!cache.getVolume(plan.volumeId)) {
+          // plan.imageIds is a copy: for wadouri ids Cornerstone reverses the array it is given in
+          // place, which would flip the order of the tile's own image list.
+          const volume = await volumeLoader.createAndCacheVolume(plan.volumeId, { imageIds: plan.imageIds })
+          ;(volume as unknown as { load: () => void }).load()
+        }
       }
-      return volumeId
-    })().finally(() => volumesInFlight.delete(volumeId))
-    volumesInFlight.set(volumeId, job)
+      builtVolumes.set(plan.volumeId, seriesId)
+      largestVolumeMB = Math.max(largestVolumeMB, plan.mb)
+      const { volumeId, step, total, used } = plan
+      return { volumeId, step, total, used }
+    })().finally(() => volumesInFlight.delete(seriesId))
+    volumesInFlight.set(seriesId, job)
   }
   return job
+}
+
+/** Frees the graphics memory of volumes no tile shows any more (all but these series). */
+export function releaseVolumes(keepSeries: Set<number>): void {
+  for (const [volumeId, seriesId] of [...builtVolumes]) {
+    if (keepSeries.has(seriesId) || volumesInFlight.has(seriesId)) continue
+    builtVolumes.delete(volumeId)
+    try {
+      if (cache.getVolume(volumeId)) cache.removeVolumeLoadObject(volumeId)
+    } catch (e) {
+      console.warn('could not release volume', volumeId, e)
+    }
+  }
 }
 
 /** Which way the slices of a tile run, for the scroll bar: labels of its two ends. */

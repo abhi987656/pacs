@@ -56,9 +56,12 @@ import {
   getEngine,
   getNatural,
   getVoi,
+  gpu,
   initCornerstone,
   isDragMode,
+  lowerVolumeBudget,
   onAnnotationCompleted,
+  releaseVolumes,
   setPresentationLink,
   setPrimaryTool,
   setReferenceLines,
@@ -69,7 +72,7 @@ import {
   zoomActualSize,
   zoomToFit
 } from './cs'
-import type { DragMode, ToolName } from './cs'
+import type { DragMode, ToolName, VolumePlan } from './cs'
 import { ContextMenu } from './ContextMenu'
 import type { MenuItem } from './ContextMenu'
 import { clearSpineLabels, setSpineNotifier } from './spine'
@@ -163,6 +166,10 @@ function VBtn(p: { title: string; onClick: () => void; active?: boolean; on?: bo
     </button>
   )
 }
+
+const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`
+
+type ReopenView = { kind: 'mpr' | 'coronal' | 'sagittal'; seriesId: number }
 
 interface MprState {
   seriesId: number
@@ -280,6 +287,10 @@ export function ViewerApp() {
   linkRef.current = { scrollLink, linkMembers }
   const toolRef = useRef({ tool, locked })
   toolRef.current = { tool, locked }
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const mprRef = useRef(mpr)
+  mprRef.current = mpr
   const expected = useRef(new Map<string, number>())
 
   const isLinked = (slotId: string, l = linkRef.current) => l.scrollLink && (l.linkMembers == null || l.linkMembers.includes(slotId))
@@ -390,10 +401,23 @@ export function ViewerApp() {
     [ready, ensureImages, exitMpr]
   )
 
-  // If the graphics card resets (Windows does this when the GPU is busy too long), WebGL loses
-  // everything and the tiles stay black. Reload the viewer and reopen the same study.
+  // If the graphics card resets (Windows does this when the card runs out of memory or is busy too
+  // long), WebGL loses everything and the tiles stay black. Reload the viewer and reopen the same
+  // study; if a volume (MPR / coronal / sagittal) was shown, it is rebuilt smaller this time.
+  const lostHandled = useRef(false)
   useEffect(() => {
     const onLost = () => {
+      // One reset loses every graphics context of the window at once (several events): act once.
+      if (lostHandled.current) return
+      lostHandled.current = true
+      const lowered = lowerVolumeBudget()
+      const m = mprRef.current
+      const slot = slotsRef.current[activeRef.current]
+      const view: ReopenView | null = m
+        ? { kind: 'mpr', seriesId: m.seriesId }
+        : slot && (slot.kind === 'coronal' || slot.kind === 'sagittal') && slot.seriesId != null
+          ? { kind: slot.kind, seriesId: slot.seriesId }
+          : null
       const now = Date.now()
       let resets = 1
       try {
@@ -402,14 +426,25 @@ export function ViewerApp() {
         sessionStorage.setItem('pacs:glResets', String(resets))
         sessionStorage.setItem('pacs:glResetAt', String(now))
         if (currentStudyId != null) sessionStorage.setItem('pacs:reopen', String(currentStudyId))
+        if (view && lowered && resets <= 2) sessionStorage.setItem('pacs:reopenView', JSON.stringify(view))
+        else sessionStorage.removeItem('pacs:reopenView')
       } catch {
         /* storage blocked */
       }
       if (resets > 2) {
-        setInitError('The graphics card keeps resetting. Close the viewer and open the images again; if it happens again, update the graphics driver.')
+        setInitError(
+          'The graphics card keeps resetting, even with smaller volumes. Click “Try again” to open the images ' +
+            'without MPR. If it happens again, update the graphics driver; for MPR, a thicker series (2–5 mm) ' +
+            'needs much less graphics memory.'
+        )
         return
       }
-      ui.toast('The graphics card was reset – reopening the images…', 'error')
+      ui.toast(
+        lowered && view
+          ? 'The graphics card ran out of memory – reopening with a lighter volume…'
+          : 'The graphics card was reset – reopening the images…',
+        'error'
+      )
       setTimeout(() => location.reload(), 1200)
     }
     eventTarget.addEventListener(CoreEnums.Events.WEBGL_CONTEXT_LOST, onLost)
@@ -421,12 +456,16 @@ export function ViewerApp() {
   loadSavedRef.current = (studyId: number) => (annLoaded.current.has(studyId) ? Promise.resolve(0) : loadSavedAnnotations(studyId, false))
 
   const pendingStudy = useRef<number | null>(null)
-  // After such a reload: open the study that was on screen.
+  // After such a reload: open the study that was on screen, and its MPR / plane view.
+  const [reopenView, setReopenView] = useState<ReopenView | null>(null)
   useEffect(() => {
     try {
       const id = Number(sessionStorage.getItem('pacs:reopen'))
       sessionStorage.removeItem('pacs:reopen')
       if (id > 0 && pendingStudy.current == null) pendingStudy.current = id
+      const view = JSON.parse(sessionStorage.getItem('pacs:reopenView') || 'null') as ReopenView | null
+      sessionStorage.removeItem('pacs:reopenView')
+      if (id > 0 && view && typeof view.seriesId === 'number' && ['mpr', 'coronal', 'sagittal'].includes(view.kind)) setReopenView(view)
     } catch {
       /* storage blocked */
     }
@@ -590,6 +629,35 @@ export function ViewerApp() {
     return () => clearTimeout(t)
   }, [ready, refLines, refSource, active, slots, mpr])
 
+  // ------------------------------------------------------------ volumes (MPR, coronal, sagittal)
+  /** Series whose volume had to be built from fewer images: note shown on its tiles. */
+  const [volumeNotes, setVolumeNotes] = useState<Record<number, string>>({})
+  const toldSeries = useRef(new Set<number>())
+  const onVolumePlan = useCallback(
+    (seriesId: number, plan: VolumePlan) => {
+      if (plan.step <= 1) return
+      const note = `every ${ordinal(plan.step)} image`
+      setVolumeNotes((n) => (n[seriesId] === note ? n : { ...n, [seriesId]: note }))
+      if (toldSeries.current.has(seriesId)) return
+      toldSeries.current.add(seriesId)
+      ui.toast(
+        `This series has ${plan.total} images – more than this computer's graphics memory holds at full detail. ` +
+          `Coronal, sagittal and MPR views use every ${ordinal(plan.step)} image (${plan.used}); the original images are unchanged.`,
+        'info'
+      )
+    },
+    [ui]
+  )
+
+  // Free the graphics memory of volumes no tile shows any more.
+  useEffect(() => {
+    if (!ready) return
+    const keep = new Set<number>()
+    if (mpr) keep.add(mpr.seriesId)
+    for (const s of slots) if (s.kind !== 'stack' && s.seriesId != null) keep.add(s.seriesId)
+    releaseVolumes(keep)
+  }, [ready, slots, mpr])
+
   // ------------------------------------------------------------ MPR
   const enterMpr = async () => {
     const slot = slots[active]
@@ -620,10 +688,11 @@ export function ViewerApp() {
       try {
         const imgs = imagesRef.current[mpr.seriesId]
         setMprLoading('Loading images…')
-        const volumeId = await ensureVolume(mpr.seriesId, imgs.imageIds)
+        const plan = await ensureVolume(mpr.seriesId, imgs.imageIds)
         if (cancelled) return
+        onVolumePlan(mpr.seriesId, plan)
         setMprLoading('Building volume…')
-        await setVolumesForViewports(getEngine(), [{ volumeId }], MPR_IDS)
+        await setVolumesForViewports(getEngine(), [{ volumeId: plan.volumeId }], MPR_IDS)
         getEngine().renderViewports(MPR_IDS)
         setMprLoading(null)
       } catch (e) {
@@ -656,6 +725,26 @@ export function ViewerApp() {
     }
     engine.renderViewports(MPR_IDS)
   }, [slab, mpr, mprLoading])
+
+  useEffect(() => {
+    const want = reopenView
+    if (!want || !ready || currentStudyId == null || mpr) return
+    const list = seriesMap[currentStudyId]
+    const slot = slots[0]
+    if (!list || !slot || slot.studyId !== currentStudyId) return // still opening
+    if (!list.some((s) => s.id === want.seriesId)) {
+      setReopenView(null)
+      return
+    }
+    if (slot.seriesId !== want.seriesId) {
+      void loadIntoSlot(0, want.seriesId, currentStudyId)
+      return
+    }
+    setReopenView(null)
+    if (want.kind === 'mpr') void enterMpr()
+    else void reformatActive(want.kind)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reopenView, ready, currentStudyId, seriesMap, slots, mpr])
 
   // ------------------------------------------------------------ tools
   useEffect(() => {
@@ -1223,10 +1312,26 @@ export function ViewerApp() {
   const activeSeriesId = slots[active]?.seriesId
 
   if (initError) {
+    const g = gpu()
     return (
       <div className="v-welcome">
         <h3>Viewer could not start</h3>
         <p>{initError}</p>
+        {g.renderer && <p className="v-gpu">Graphics: {g.renderer}</p>}
+        <button
+          className="btn"
+          onClick={() => {
+            try {
+              sessionStorage.removeItem('pacs:glResets')
+              sessionStorage.removeItem('pacs:glResetAt')
+            } catch {
+              /* storage blocked */
+            }
+            location.reload()
+          }}
+        >
+          Try again
+        </button>
       </div>
     )
   }
@@ -1614,6 +1719,8 @@ export function ViewerApp() {
                 showAnnotations={showAnn}
                 scrollLinked={slots.length > 1 && isLinked(slot.id)}
                 loading={slot.id.startsWith('mpr-') ? mprLoading : null}
+                volumeNote={slot.kind !== 'stack' && slot.seriesId != null ? volumeNotes[slot.seriesId] ?? null : null}
+                onVolumePlan={onVolumePlan}
                 dragMode={isDragMode(tool) ? tool : null}
                 onCycleDragMode={cycleDragMode}
                 onContextMenu={(x, y) => {

@@ -23,7 +23,7 @@ import {
   voiMultiplier,
   zoomBy
 } from './cs'
-import type { DragMode, SliceAxis } from './cs'
+import type { DragMode, SliceAxis, VolumePlan } from './cs'
 import { SpineLabelTool, spineLevelAt } from './spine'
 
 export type SlotKind = 'stack' | 'axial' | 'sagittal' | 'coronal'
@@ -76,6 +76,9 @@ interface Props {
   onMiddleDoubleClick: () => void
   showAnnotations: boolean
   scrollLinked: boolean
+  /** Coronal / sagittal / MPR built from fewer images to fit the graphics card, e.g. "every 2nd image". */
+  volumeNote?: string | null
+  onVolumePlan?: (seriesId: number, plan: VolumePlan) => void
 }
 
 const ORIENT: Record<Exclude<SlotKind, 'stack'>, Enums.OrientationAxis> = {
@@ -344,12 +347,13 @@ export function Viewport(p: Props) {
     void (async () => {
       try {
         setVolLoading('Loading images…')
-        const volumeId = await ensureVolume(seriesId, imgs.imageIds)
+        const plan = await ensureVolume(seriesId, imgs.imageIds)
         if (cancelled) return
+        propsRef.current.onVolumePlan?.(seriesId, plan)
         setVolLoading(`Building ${kind} view…`)
         const vp = getEngine().getViewport(id) as Types.IVolumeViewport | undefined
         if (!vp) return
-        await vp.setVolumes([{ volumeId }])
+        await vp.setVolumes([{ volumeId: plan.volumeId }])
         if (cancelled) return
         if (p.slot.voi) applyVoi(vp as unknown as Types.IViewport, p.slot.voi.ww, p.slot.voi.wc)
         vp.render()
@@ -430,7 +434,12 @@ export function Viewport(p: Props) {
       <div ref={elRef} className="v-element" />
       {!hasImages && <div className="v-empty">Drag a series here, or click a thumbnail above</div>}
       {(p.loading || volLoading) && <div className="v-loading">{p.loading || volLoading}</div>}
-      {kind !== 'stack' && <div className="mpr-label">{kind.toUpperCase()}</div>}
+      {kind !== 'stack' && (
+        <div className="mpr-label" title={p.volumeNote ? 'Built from fewer images so that it fits the graphics memory' : undefined}>
+          {kind.toUpperCase()}
+          {p.volumeNote ? ` · ${p.volumeNote}` : ''}
+        </div>
+      )}
       {p.scrollLinked && hasImages && <div className="link-badge" title="Linked scrolling (S)">LINK</div>}
       {p.showOverlay && hasImages && s && (
         <>

@@ -131,8 +131,14 @@ a second monitor if you have one)
 - **Compare with prior** (key **C**): current and previous study side by side, with linked scrolling.
 - **Coronal / sagittal in the same tile**: **3** shows the coronal view (3 again = back to the original
   axial images), **?** shows the sagittal view (? again = coronal). Window/level is kept.
-- **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs. If the graphics
-  card resets (the tiles would turn black), the viewer reopens the study by itself.
+- **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs.
+- **No dedicated graphics card needed**: MPR / coronal / sagittal also run on built-in graphics
+  (Intel, AMD). A volume is sized to fit the graphics memory: a very long series (for example a
+  1 mm body CT with 1,500 images on built-in graphics) is reformatted from every 2nd or 3rd image –
+  the tile label says so ("CORONAL · every 2nd image"); the original images are unchanged. If
+  Windows still resets the graphics card, the viewer reopens the same study and view by itself with
+  half the memory (and remembers that for this computer). After three resets in two minutes it
+  stops and offers **Try again** (without MPR) and shows the graphics card's name.
 - **Scroll bar** on the left of each tile, as on GE / Synapse workstations: its ends show which way the
   slices run (**H**/**F** for axial, **A**/**P** for coronal, **R**/**L** for sagittal). Drag the
   handle or click the bar to move through the images; the image number shows while dragging.
