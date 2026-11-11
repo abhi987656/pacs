@@ -91,6 +91,10 @@ const api: PacsApi = {
   saveMacro: (m) => ipcRenderer.invoke('macros:save', m),
   deleteMacro: (id) => ipcRenderer.invoke('macros:delete', id),
 
+  spellWords: () => ipcRenderer.invoke('spell:words'),
+  spellAddWord: (word) => ipcRenderer.invoke('spell:add', word),
+  spellRemoveWord: (word) => ipcRenderer.invoke('spell:remove', word),
+  onSpellWordsChanged: (cb) => on('spell:changed', cb),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (s) => ipcRenderer.invoke('settings:save', s),
   pickImageAsDataUrl: () => ipcRenderer.invoke('dialog:pickImage'),

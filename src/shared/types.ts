@@ -163,6 +163,10 @@ export interface Settings {
   dictationPauseMs: number
   dictationCommands: boolean
   dictationReplacements: DictationReplacement[]
+  /** Red underline under misspelled words, right-click for suggestions (like Word). */
+  spellCheck: boolean
+  /** Dictionaries: British + American English, or one of them. */
+  spellLanguage: 'en-GB+en-US' | 'en-GB' | 'en-US'
 }
 
 export interface DictationReplacement {
@@ -194,7 +198,9 @@ export const DEFAULT_SETTINGS: Settings = {
   dictationMicId: '',
   dictationPauseMs: 600,
   dictationCommands: true,
-  dictationReplacements: []
+  dictationReplacements: [],
+  spellCheck: true,
+  spellLanguage: 'en-GB+en-US'
 }
 
 // ------------------------------------------------------------------ speech recognition
@@ -638,6 +644,11 @@ export interface PacsApi {
   saveMacro(m: Omit<Macro, 'id'> & { id?: number }): Promise<Macro>
   deleteMacro(id: number): Promise<void>
   // settings
+  // spelling: the words the user added to the dictionary
+  spellWords(): Promise<string[]>
+  spellAddWord(word: string): Promise<string[]>
+  spellRemoveWord(word: string): Promise<string[]>
+  onSpellWordsChanged(cb: (words: string[]) => void): () => void
   getSettings(): Promise<Settings>
   saveSettings(s: Settings): Promise<Settings>
   pickImageAsDataUrl(): Promise<string | null>

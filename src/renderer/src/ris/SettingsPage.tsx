@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Database, FolderOpen, HardDriveDownload, Mic, Plus, Save, Share2, Trash, Upload } from 'lucide-react'
+import { Database, FolderOpen, HardDriveDownload, Mic, Plus, Save, Share2, SpellCheck2, Trash, Upload, X } from 'lucide-react'
 import type { DataInfo, Settings } from '@shared/types'
-import { useUi } from '../common/ui'
+import { useEvent, useUi } from '../common/ui'
 import { FONT_FAMILIES, FONT_SIZES } from './editor'
 import { SpeechModelsPanel } from './DictationControl'
 import { PhonePanel } from './PhonePanel'
@@ -188,6 +188,32 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
 
         <section className="card">
           <h3>
+            <SpellCheck2 size={15} /> Spelling
+          </h3>
+          <p className="muted">
+            Misspelled words in reports and templates get a red wavy underline. Right-click one for suggestions,{' '}
+            <b>Ignore All</b> or <b>Add to Dictionary</b>. Radiology words (hepatomegaly, hypoechoic, pelvicalyceal …) are built in, and
+            words in CAPITALS (CECT, USG) are not checked. Works without internet.
+          </p>
+          <div className="grid2">
+            <Field label="Spell check">
+              <label className="check-line">
+                <input type="checkbox" checked={s.spellCheck} onChange={(e) => set('spellCheck', e.target.checked)} /> Check spelling as I type
+              </label>
+            </Field>
+            <Field label="Dictionary">
+              <select value={s.spellLanguage} onChange={(e) => set('spellLanguage', e.target.value as Settings['spellLanguage'])}>
+                <option value="en-GB+en-US">English – British and American (oedema and edema)</option>
+                <option value="en-GB">English – British only (oedema, haemorrhage, tumour)</option>
+                <option value="en-US">English – American only (edema, hemorrhage, tumor)</option>
+              </select>
+            </Field>
+          </div>
+          <MyWords />
+        </section>
+
+        <section className="card">
+          <h3>
             <Mic size={15} /> Dictation (offline speech recognition)
           </h3>
           <p className="muted">
@@ -329,5 +355,33 @@ function SharingCard() {
       </p>
       <SharesList shares={shares} />
     </section>
+  )
+}
+
+/** The words added with "Add to Dictionary", with a way to take one out again. */
+function MyWords() {
+  const [words, setWords] = useState<string[]>([])
+  useEffect(() => {
+    void api.spellWords().then(setWords)
+  }, [])
+  useEvent(api.onSpellWordsChanged, (w: string[]) => setWords(w))
+  return (
+    <div className="my-words">
+      <div className="muted small">
+        My dictionary ({words.length} {words.length === 1 ? 'word' : 'words'}){words.length ? ' – click × to remove a word' : ''}
+      </div>
+      {words.length > 0 && (
+        <div className="word-chips">
+          {words.map((w) => (
+            <span key={w} className="word-chip">
+              {w}
+              <button className="icon-btn" title={`Remove "${w}"`} onClick={() => void api.spellRemoveWord(w).then(setWords)}>
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

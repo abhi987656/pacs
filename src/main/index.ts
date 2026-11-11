@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, session, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -30,7 +30,8 @@ import { LINK_SCHEME } from './share/protocol'
 import { SpeechService } from './speech'
 import { getSpeechModel } from './speechModels'
 import { buildSeriesImages, sortInstances } from './sortImages'
-import { createMainWindow, createViewerWindow } from './windows'
+import { createMainWindow, createViewerWindow, setSpellWordHandler } from './windows'
+import { MEDICAL_WORDS } from '@shared/medicalWords'
 
 // Tests run two copies of the app side by side (sender and receiver), each with its own profile.
 if (process.env.PACS_USER_DATA_DIR) app.setPath('userData', process.env.PACS_USER_DATA_DIR)
@@ -147,6 +148,48 @@ function openViewer(studyId: number): void {
   viewerWin.focus()
   if (viewerReady) viewerWin.webContents.send('viewer:load-study', studyId)
   else pendingViewerStudy = studyId
+}
+
+// ------------------------------------------------------------------ spelling
+// The report editor has its own spell checker (offline, with radiology words). Plain text boxes
+// (clinical details, case details) use Chromium's, set to the same English dictionaries here.
+
+const spellWords = (): string[] => db.getKv<string[]>('spellWords') ?? []
+
+function addSpellWord(input: string): string[] {
+  const w = input.trim().slice(0, 60)
+  const list = spellWords()
+  if (!w || /\s/.test(w) || list.some((x) => x.toLowerCase() === w.toLowerCase())) return list
+  const next = [...list, w].sort((a, b) => a.localeCompare(b))
+  db.setKv('spellWords', next)
+  try {
+    session.defaultSession.addWordToSpellCheckerDictionary(w)
+  } catch {
+    /* in-memory session */
+  }
+  broadcast('spell:changed', next)
+  return next
+}
+
+function applySpelling(s: Settings): void {
+  const ses = session.defaultSession
+  try {
+    ses.setSpellCheckerEnabled(s.spellCheck)
+    if (process.platform !== 'darwin') {
+      // Without this Chromium uses the Windows language, and for e.g. English (India) it has no dictionary.
+      const wanted = s.spellLanguage === 'en-GB' ? ['en-GB'] : s.spellLanguage === 'en-US' ? ['en-US'] : ['en-GB', 'en-US']
+      const langs = wanted.filter((l) => ses.availableSpellCheckerLanguages.includes(l))
+      if (langs.length) ses.setSpellCheckerLanguages(langs)
+    }
+    // Radiology words into Chromium's dictionary too (once per word-list version).
+    const version = `${MEDICAL_WORDS.length}`
+    if (db.getKv<string>('chromiumMedicalWords') !== version) {
+      for (const w of MEDICAL_WORDS) ses.addWordToSpellCheckerDictionary(w)
+      db.setKv('chromiumMedicalWords', version)
+    }
+  } catch (e) {
+    console.error('[spelling]', e)
+  }
 }
 
 function registerIpc(): void {
@@ -422,7 +465,27 @@ function registerIpc(): void {
 
   // ---------------- settings & data
   ipcMain.handle('settings:get', () => db.getSettings())
-  ipcMain.handle('settings:save', (_e, s: Settings) => db.saveSettings(s))
+  ipcMain.handle('settings:save', (_e, s: Settings) => {
+    const saved = db.saveSettings(s)
+    applySpelling(saved)
+    return saved
+  })
+
+  // ---------------- spelling: the user's own words ("Add to Dictionary")
+  ipcMain.handle('spell:words', () => spellWords())
+  ipcMain.handle('spell:add', (_e, word: unknown) => addSpellWord(String(word ?? '')))
+  ipcMain.handle('spell:remove', (_e, word: unknown) => {
+    const w = String(word ?? '').trim()
+    const list = spellWords().filter((x) => x !== w)
+    db.setKv('spellWords', list)
+    try {
+      session.defaultSession.removeWordFromSpellCheckerDictionary(w)
+    } catch {
+      /* not there */
+    }
+    broadcast('spell:changed', list)
+    return list
+  })
   ipcMain.handle('dialog:pickImage', async (e) => {
     const win = senderWindow(e.sender) ?? undefined
     const opts: Electron.OpenDialogOptions = {
@@ -525,6 +588,8 @@ app.whenReady().then(() => {
   )
   registerIpc()
   registerLinkHandler()
+  applySpelling(db.getSettings())
+  setSpellWordHandler((w) => addSpellWord(w))
   void phone.init()
   void receiver.cleanup()
   void shares.init()

@@ -1478,3 +1478,71 @@ table.grid .muted {
 .card .way-chip.way-ready {
   color: #5cc486;
 }
+
+/* ================================================= spelling (like Word) */
+.report-doc .spell-error {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: #e0281f;
+  text-decoration-thickness: 1px;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.spell-menu {
+  position: fixed;
+  z-index: 2000;
+  min-width: 200px;
+  max-width: 320px;
+  background: #fff;
+  color: #1c2833;
+  border: 1px solid #c9d1d8;
+  border-radius: 6px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  padding: 4px 0;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+}
+.spell-item {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 6px 14px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.spell-item:hover:not(.disabled) {
+  background: #e8f1fb;
+}
+.spell-item.suggestion {
+  font-weight: 700;
+}
+.spell-item.disabled {
+  color: #7a8794;
+  cursor: default;
+  font-style: italic;
+}
+.spell-sep {
+  height: 1px;
+  background: #e1e6ea;
+  margin: 4px 0;
+}
+.my-words {
+  margin-top: 10px;
+}
+.word-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.word-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 2px 1px 8px;
+  border: 1px solid #2c2c31;
+  border-radius: 10px;
+  font-size: 12px;
+}

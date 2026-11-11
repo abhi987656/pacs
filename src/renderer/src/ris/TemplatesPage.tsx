@@ -4,6 +4,8 @@ import { BookPlus, Copy, Plus, Save, Search, Trash } from 'lucide-react'
 import type { Macro, Settings, Template } from '@shared/types'
 import { useUi } from '../common/ui'
 import { buildExtensions } from './editor'
+import { SpellCheck } from './spell/SpellCheck'
+import { useSpellMenu } from './spell/SpellMenu'
 import { Ribbon } from './Ribbon'
 
 const api = window.api
@@ -43,11 +45,12 @@ function TemplatesEditor({ settings }: { settings: Settings }) {
   const [dirty, setDirty] = useState(false)
 
   const editor = useEditor({
-    extensions: buildExtensions({ getMacros: () => [], placeholder: 'Template text…' }),
+    extensions: [...buildExtensions({ getMacros: () => [], placeholder: 'Template text…' }), SpellCheck],
     content: '',
-    editorProps: { attributes: { class: 'report-doc', spellcheck: 'true' } },
+    editorProps: { attributes: { class: 'report-doc', spellcheck: 'false' } },
     onUpdate: () => setDirty(true)
   })
+  const spellMenu = useSpellMenu(editor)
 
   const reload = async () => setList(await api.listTemplates())
   useEffect(() => {
@@ -187,7 +190,10 @@ function TemplatesEditor({ settings }: { settings: Settings }) {
         />
         <div className="editor-scroll simple">
           <div className="simple-page" style={{ fontFamily: `'${settings.editorFontFamily}', serif`, fontSize: settings.editorFontSize }}>
-            <EditorContent editor={editor} />
+            <div onContextMenu={spellMenu.onContextMenu}>
+              <EditorContent editor={editor} />
+            </div>
+            {spellMenu.menu}
           </div>
         </div>
         <p className="hint">

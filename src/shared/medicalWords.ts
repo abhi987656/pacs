@@ -1,0 +1,120 @@
+// Radiology words the general English dictionaries don't know, so they are not underlined.
+// British and American spellings are both included. Words a radiologist adds with
+// "Add to Dictionary" are kept separately (Settings › Spelling).
+
+const WORDS = `
+anechoic hypoechoic hyperechoic isoechoic echogenic echogenicity echotexture echopattern echoes
+sonographic sonographically sonography sonologist sonomammography transabdominal transvaginal
+transrectal endovaginal transperineal Doppler dopplers colour color spectral resistive pulsatility
+hypodense hyperdense isodense hypodensity hyperdensity hypodensities hyperdensities
+hypoattenuating hyperattenuating isoattenuating hypoattenuation hyperattenuation attenuating
+hypointense hyperintense isointense hypointensity hyperintensity hypointensities hyperintensities
+hypoenhancing hyperenhancing isoenhancing nonenhancing enhancing enhancement heterogeneously
+homogeneously heterogeneity homogeneity hypervascular hypovascular avascular
+vascularity vascularization vascularisation neovascularity neovascularisation neovascularization
+subcentimetric subcentimeter subcentimetre centimetric millimetric perilesional intralesional
+multiplanar reformatted reformats reformation reformations postcontrast precontrast unenhanced
+noncontrast nondependent lobulated lobulation spiculated spiculation microlobulated
+calcific calcification calcifications microcalcification microcalcifications noncalcified
+septation septations septated multiseptated loculated multiloculated unilocular multilocular
+necrotic haemorrhagic hemorrhagic steatosis steatotic multifocal bifocal infiltrative encasement
+abutment abutting masslike nodularity ectasia ectatic dilatation stenoses stenotic thrombi
+thrombosed thrombotic aneurysmal pseudoaneurysm pseudoaneurysms oedematous edematous oedema edema
+lymphadenopathy adenopathy lymphadenitis nodal perinodal paraaortic aortocaval
+paracaval precaval retrocaval interaortocaval retrocrural mesenteric peripancreatic periportal
+portacaval portocaval coeliac celiac paracolic paravertebral prevertebral paratracheal pretracheal
+subcarinal hilar perihilar prevascular retrocardiac supraclavicular infraclavicular submental
+submandibular jugulodigastric retropharyngeal parapharyngeal obturator presacral perirectal
+mesorectal mesorectum hepatomegaly splenomegaly hepatosplenomegaly hepatocellular hepatoma
+hepatobiliary hepatorenal hepatoduodenal hepatogastric intrahepatic extrahepatic perihepatic
+subhepatic suprahepatic parenchyma parenchymal subcapsular capsular pericapsular haemangioma
+hemangioma haemangiomas hemangiomas cirrhotic periportal ascites ascitic cholelithiasis
+choledocholithiasis cholecystitis cholecystectomy cholecystostomy cholangitis cholangiocarcinoma
+cholangiopathy cholangiography cholestasis cholestatic choledochal choledochus choledochojejunostomy
+gallbladder gallstones pericholecystic IHBR IHBRD CBD CHD MPD pancreatic pancreatitis
+pancreaticoduodenal pseudocyst pseudocysts necrotising necrotizing splenic splenule splenules
+splenunculus perisplenic splenorenal perirenal perinephric pararenal nephrolithiasis nephrocalcinosis
+urolithiasis ureterolithiasis calculi calyces calyceal caliceal pelvicalyceal pelvicaliceal
+pelviureteric ureteropelvic hydronephrosis hydroureter hydroureteronephrosis ureteric ureteral
+ureterocele vesicoureteric vesicoureteral ureterovesical corticomedullary pyelonephritis pyelitis
+pyonephrosis angiomyolipoma angiomyolipomas oncocytoma nephrectomy suprarenal adenomas
+myelolipoma phaeochromocytoma pheochromocytoma intravesical perivesical trabeculated
+trabeculation diverticula diverticular diverticulosis diverticulitis prostatic prostatomegaly
+periprostatic transitional epididymal epididymitis orchitis epididymo epididymoorchitis
+varicocele hydrocele spermatocele microlithiasis endometrium endometrial myometrium myometrial
+adenomyosis fibroid fibroids leiomyoma leiomyomas intramural subserosal submucosal serosal
+endocervical parametrium parametrial adnexa adnexal luteum luteal endometrioma endometriomas
+endometriosis teratoma cystadenoma cystadenomas hydrosalpinx pyosalpinx salpingitis tuboovarian
+retrouterine anteverted retroverted anteflexed retroflexed intrauterine extrauterine foetal fetal
+foetus fetus placental amniotic oligohydramnios polyhydramnios CRL BPD EFW AFI jejunal ileal
+ileocaecal ileocecal caecum cecum caecal cecal colonic rectosigmoid anorectal perianal appendicitis
+appendicular appendicolith appendicoliths periappendiceal mesoappendix intussusception volvulus
+pneumoperitoneum pneumatosis intraperitoneal retroperitoneal retroperitoneum mesentery omentum
+omental carcinomatosis peritonitis fistulae fistulous phlegmon paraumbilical periumbilical
+epigastric hypogastric hypochondrium hypochondrial suprapubic incisional oesophagus esophagus
+oesophageal esophageal gastrooesophageal gastroesophageal pyloric antral fundal duodenal duodenitis
+gastritis bronchiectasis bronchiectatic bronchiolitis bronchiolar bronchovascular peribronchial
+peribronchovascular endobronchial tracheobronchial carinal interlobular intralobular centrilobular
+panlobular paraseptal emphysematous bullae bullous blebs consolidations consolidative atelectasis
+atelectatic subsegmental lingula lingular hydropneumothorax haemothorax hemothorax
+pyopneumothorax pneumomediastinum pneumopericardium subpleural pleurodesis fibrothorax mediastinal
+cardiomegaly cardiothoracic pericardial pericarditis costophrenic cardiophrenic hemidiaphragm
+hemidiaphragms subdiaphragmatic honeycombing reticulation reticulonodular micronodular micronodules
+groundglass GGO GGOs cavitation cavitary cavitating fibrocavitary granulomas granulomatous
+tuberculoma tuberculomas tubercular tuberculous pneumonitis bronchopneumonia opacities
+opacification apices bibasal bibasilar lymphangitic thromboembolism emboli hila aortopulmonary
+periventricular paraventricular intraventricular ventriculomegaly supratentorial infratentorial
+tentorial falcine intraaxial extraaxial gyral gyri sulcal cerebellopontine frontoparietal
+temporoparietal parietooccipital frontotemporal temporooccipital insular opercular operculum
+thalamic thalami ganglionic capsuloganglionic lentiform caudate putamen putaminal pallidus
+radiata semiovale callosal brainstem pontine tegmentum tectal tectum sellar suprasellar
+parasellar hypophysis infundibular chiasmatic subdural extradural subarachnoid intraparenchymal
+haematoma hematoma haematomas hematomas lacunar lacune lacunes hyperacute ischaemia ischemia
+ischaemic ischemic penumbra gliosis gliotic encephalomalacia encephalomalacic leukoaraiosis
+leukoencephalopathy microangiopathy microangiopathic demyelination demyelinating meningioma
+meningiomas gliomas glioblastoma astrocytoma oligodendroglioma ependymoma medulloblastoma
+craniopharyngioma schwannoma schwannomas neurofibroma neurofibromas leptomeningeal pachymeningeal
+meningeal arteriovenous cavernoma cavernomas mastoiditis paranasal ethmoidal sphenoidal
+polyposis intraconal extraconal retrobulbar nasopharyngeal oropharynx oropharyngeal hypopharynx
+hypopharyngeal vallecula valleculae pyriform piriform parotid thyroiditis goitre goiter
+multinodular TIRADS ACA MCA PCA ICA ECA CCA SCA PICA AICA brachiocephalic SMA SMV IMA IMV IVC SVC
+splenoportal portosystemic varices variceal aortoiliac popliteal peroneal atherosclerotic
+atheromatous recanalised recanalized DVT thrombophlebitis osteophyte osteophytes osteophytic
+spondylosis spondylotic spondylolisthesis spondylolysis retrolisthesis anterolisthesis listhesis
+spondylitis spondylodiscitis discitis discal discogenic desiccation desiccated protrusions
+extrusions sequestration annular annulus intervertebral uncovertebral facetal ligamentum flavum
+foraminal neuroforaminal foramina foraminotomy thecal cauda equina conus medullaris filum
+terminale myelopathy myelomalacia syrinx syringomyelia hydromyelia radiculopathy kyphotic
+lordotic scoliotic endplate endplates Schmorl Schmorl's Modic osteopenia osteopenic osteoporotic
+osteolytic osteoblastic osteosclerotic sclerotic periosteal periostitis osteomyelitis sequestrum
+involucrum avulsion enthesopathy enthesophyte enthesophytes tendinosis tendinopathy tenosynovitis
+synovitis menisci meniscal cruciate ACL PCL MCL LCL chondromalacia chondral osteochondral
+subchondral trabecular metaphysis metaphyseal diaphysis diaphyseal epiphysis epiphyseal physis
+physeal apophysis apophyseal acetabulum acetabular patellofemoral glenoid glenohumeral
+acromioclavicular supraspinatus infraspinatus subscapularis teres labral labrum subacromial
+subdeltoid olecranon scaphoid lunate triquetrum trapezium trapezoid hamate capitate pisiform
+metacarpal metacarpals metatarsal metatarsals phalangeal interphalangeal metacarpophalangeal
+metatarsophalangeal calcaneus calcaneal talus talar navicular cuboid cuneiform cuneiforms
+malleolus malleolar syndesmosis sacroiliac sacroiliitis coccygeal ischial pubic symphysis humeral
+lumbosacral dorsolumbar arthropathy comminuted undisplaced nondisplaced mammographic mammogram
+mammograms fibroadenoma fibroadenomas fibrocystic fibroglandular intramammary retroareolar
+subareolar periareolar ductal galactocele gynaecomastia gynecomastia BIRADS USG CECT NCCT HRCT
+CTA MRA MRV MRCP MRI CXR KUB IVU IVP DWI ADC FLAIR STIR SWI GRE HU DFOV SPECT FDG SUV LIRADS
+PIRADS ORADS CORADS NAD WNL HPE FNAC FNA approx cm cms mm mms cc ml mL kg
+haemorrhage hemorrhage haemoperitoneum hemoperitoneum haemopericardium hemopericardium haemosiderin
+hemosiderin haemosiderosis hemosiderosis haematuria hematuria haemoptysis hemoptysis haematemesis
+hematemesis haemodynamic hemodynamic haemodynamically hemodynamically anaemia anemia aetiology
+etiology paediatric pediatric orthopaedic orthopedic gynaecology gynecology gynaecological
+gynecological leukaemia leukemia diarrhoea diarrhea dyspnoea dyspnea oestrogen estrogen
+para peri intra extra supra infra retro hypo hyper iso pseudo poly multi mid trans sub inter tubo
+gastro cardio broncho hepato neuro uro
+Sylvian sylvian Monro Magendie Luschka Rathke Meckel Meckel's Morison Morison's Rokitansky
+Bosniak Klatskin Mirizzi Caroli Chiari Dandy Hounsfield Fleischner Glisson Glisson's Gerota
+Gerota's Couinaud Wirsung Santorini Oddi Vater Treitz Hartmann Hartmann's Calot Calot's Riedel
+Riedel's Kerley Westermark Bochdalek Morgagni Pancoast Spigelian Wilms Ewing Ewing's Codman
+Brodie Baker's Hoffa Hoffa's Kager Kager's Lisfranc Chopart Colles Monteggia Galeazzi Bankart
+Sachs Segond Tillaux Perthes Osgood Schlatter Kienbock Freiberg Scheuermann Pott Pott's Paget
+Paget's Hodgkin Hodgkin's Crohn Crohn's Hirschsprung Koch Koch's Kochs Willis
+`
+
+export const MEDICAL_WORDS: string[] = [...new Set(WORDS.split(/\s+/).filter(Boolean))]

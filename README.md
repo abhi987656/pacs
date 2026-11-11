@@ -43,7 +43,13 @@ to another Personal PACS user anywhere on the internet, straight from your PC, e
 - **Macros**: type `.nad` then Space, or the code then F3, or use the Macro Text box.
 - **Key images**: press **B** in the viewer to insert the current image, with its measurements, into the report.
 - Save (draft), **Preliminary**, **Sign off** and **Sign off »** (signs and opens the next unreported study).
-- Autosave, version history, spell check, Print, and export as **PDF**, **Word (.docx)** or **text (.txt)**.
+- **Spell check like Microsoft Word**: misspelled words get a red wavy underline (the word you are
+  typing is left alone until you finish it). Right-click one for suggestions, **Ignore All** or
+  **Add to Dictionary**. About 950 radiology words (hepatomegaly, hypoechoic, pelvicalyceal,
+  spondylolisthesis …) are built in, British and American spellings are both accepted (oedema /
+  edema), and words in CAPITALS (CECT, USG) are not checked. Works offline. **Settings → Spelling**:
+  on/off, British/American, and the words you added.
+- Autosave, version history, Print, and export as **PDF**, **Word (.docx)** or **text (.txt)**.
   Exports include your letterhead, logo, patient table and signature.
 
 **Voice dictation** (offline – your voice never leaves the computer)
@@ -282,6 +288,9 @@ python scripts/make_test_data.py test-data
 - **Electron**, with React and TypeScript, built with electron-vite.
 - **Cornerstone3D** (MIT) handles image decoding, GPU rendering, tools and MPR.
 - **TipTap** (MIT) is the report editor.
+- **Spell check**: nspell (MIT) with the Hunspell English dictionaries from wooorm/dictionaries
+  (`dictionary-en`, `dictionary-en-gb`; MIT and BSD, based on SCOWL), run in a web worker
+  (`src/renderer/src/ris/spell/`). The radiology word list is `src/shared/medicalWords.ts`.
 - **SQLite** is the database, using Node's built-in `node:sqlite`, so there are no native modules to compile.
 - **dicom-parser** reads headers during import.
 - **sherpa-onnx** (Apache-2.0) runs offline speech recognition, using Silero VAD to split speech into

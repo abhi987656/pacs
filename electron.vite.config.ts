@@ -35,7 +35,12 @@ export default defineConfig({
   renderer: {
     plugins: [react(), stripCspInDev()],
     resolve: {
-      alias: { '@shared': resolve('src/shared') }
+      alias: {
+        '@shared': resolve('src/shared'),
+        // Hunspell dictionaries for the spell checker (imported as text with ?raw)
+        '@dict-gb': resolve('node_modules/dictionary-en-gb'),
+        '@dict-us': resolve('node_modules/dictionary-en')
+      }
     },
     // The DICOM image loader ships web workers and WASM codecs that must not be pre-bundled.
     optimizeDeps: {

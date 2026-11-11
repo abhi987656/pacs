@@ -31,6 +31,8 @@ import { Ribbon } from './Ribbon'
 import { DictationControl } from './DictationControl'
 import { CaseDialog } from './CaseDialog'
 import { ShareDialog, SharingPanel } from './Sharing'
+import { SpellCheck } from './spell/SpellCheck'
+import { useSpellMenu } from './spell/SpellMenu'
 
 const api = window.api
 const MODALITY_OPTIONS = ['CT', 'MR', 'CR', 'DX', 'US', 'MG', 'PT', 'NM', 'XA', 'RF', 'OT']
@@ -104,16 +106,22 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
   const readOnly = status === 'FINAL'
 
   const editor = useEditor({
-    extensions: buildExtensions({
-      getMacros: () => macrosRef.current,
-      placeholder: 'Type the report here, choose a template above, or type a macro such as .nad and press Space…'
-    }),
+    extensions: [
+      ...buildExtensions({
+        getMacros: () => macrosRef.current,
+        placeholder: 'Type the report here, choose a template above, or type a macro such as .nad and press Space…'
+      }),
+      SpellCheck
+    ],
     content: '',
-    editorProps: { attributes: { class: 'report-doc', spellcheck: 'true' } },
+    // The browser's own spell check is off here: the app's checker (radiology words, offline) underlines instead.
+    editorProps: { attributes: { class: 'report-doc', spellcheck: 'false' } },
     onUpdate: () => {
       if (!loadingRef.current) setDirty(true)
     }
   })
+
+  const spellMenu = useSpellMenu(editor)
 
   // ------------------------------------------------------------ load
   useEffect(() => {
@@ -742,7 +750,7 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
             </div>
           )}
 
-          <div className={`editor-scroll ${view} ${showMarks ? 'show-marks' : ''}`}>
+          <div className={`editor-scroll ${view} ${showMarks ? 'show-marks' : ''}`} onContextMenu={spellMenu.onContextMenu}>
             <div className={view === 'print' ? pageClass : 'simple-page'} style={zoomStyle}>
               <div style={{ fontFamily: `'${settings.editorFontFamily}', serif`, fontSize: settings.editorFontSize }}>
                 {loaded && <EditorContent editor={editor} />}
@@ -848,6 +856,7 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
       </div>
 
       {sharing && <ShareDialog study={study} senderName={settings.radiologistName} onClose={() => setSharing(false)} />}
+      {spellMenu.menu}
 
       {editDetails && (
         <CaseDialog

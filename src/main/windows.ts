@@ -44,6 +44,12 @@ function pageUrl(page: 'index' | 'viewer'): string {
 
 const preloadPath = () => join(__dirname, '../preload/index.js')
 
+/** "Add to dictionary" in a plain text box also goes into the app's own word list. */
+let onAddWord: ((word: string) => void) | null = null
+export function setSpellWordHandler(fn: (word: string) => void): void {
+  onAddWord = fn
+}
+
 function attachCommonHandlers(win: BrowserWindow, allowContextMenu: boolean): void {
   // Open external links in the default browser, never inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -71,7 +77,10 @@ function attachCommonHandlers(win: BrowserWindow, allowContextMenu: boolean): vo
         menu.append(
           new MenuItem({
             label: `Add "${params.misspelledWord}" to dictionary`,
-            click: () => win.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord)
+            click: () => {
+              win.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord)
+              onAddWord?.(params.misspelledWord)
+            }
           })
         )
         menu.append(new MenuItem({ type: 'separator' }))

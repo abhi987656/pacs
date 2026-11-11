@@ -5,6 +5,8 @@ import type { Settings, StudyFilter } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { useEvent, useUi } from '../common/ui'
 import { ReceiveCenter } from './Sharing'
+import { speller } from './spell/speller'
+import { spellLangs } from './spell/protocol'
 import type { ReceiveCenterHandle } from './Sharing'
 import { Worklist } from './Worklist'
 import { ReportPage } from './ReportPage'
@@ -26,12 +28,29 @@ export function App() {
   const [filter, setFilter] = useState<StudyFilter>({ status: '', modality: '', text: '' })
   const [studyOrder, setStudyOrder] = useState<number[]>([])
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
   const reportRef = useRef<ReportPageHandle>(null)
   const receiveRef = useRef<ReceiveCenterHandle>(null)
 
   useEffect(() => {
-    void api.getSettings().then(setSettings)
+    void api.getSettings().then((s) => {
+      setSettings(s)
+      setSettingsLoaded(true)
+    })
   }, [])
+
+  // Spell checking in the report editor (Settings › Spelling).
+  useEffect(() => {
+    if (!settingsLoaded) return
+    let stale = false
+    void api.spellWords().then((words) => {
+      if (!stale) speller.configure({ enabled: settings.spellCheck, langs: spellLangs(settings.spellLanguage), words })
+    })
+    return () => {
+      stale = true
+    }
+  }, [settingsLoaded, settings.spellCheck, settings.spellLanguage])
+  useEvent(api.onSpellWordsChanged, (words: string[]) => speller.syncWords(words))
 
   /** Navigate, but give an open report the chance to save unsaved changes first. */
   const navigate = useCallback(
