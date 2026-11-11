@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Enums as CoreEnums, setVolumesForViewports, utilities as csUtils } from '@cornerstonejs/core'
+import { Enums as CoreEnums, eventTarget, setVolumesForViewports, utilities as csUtils } from '@cornerstonejs/core'
 import type { Types } from '@cornerstonejs/core'
 import * as csTools from '@cornerstonejs/tools'
 import {
@@ -67,7 +67,7 @@ import type { DragMode, ToolName } from './cs'
 import { ContextMenu } from './ContextMenu'
 import type { MenuItem } from './ContextMenu'
 import { Viewport } from './Viewport'
-import type { SlotInfo, TileLoading } from './Viewport'
+import type { SlotInfo } from './Viewport'
 
 const api = window.api
 const MPR_IDS = ['mpr-axial', 'mpr-sagittal', 'mpr-coronal']
@@ -235,7 +235,7 @@ export function ViewerApp() {
   const [cine, setCine] = useState(false)
   const [fps, setFps] = useState(10)
   const [mpr, setMpr] = useState<MprState | null>(null)
-  const [mprLoading, setMprLoading] = useState<TileLoading | null>(null)
+  const [mprLoading, setMprLoading] = useState<string | null>(null)
   const [fullScreen, setFullScreen] = useState(false)
   const topBeforeFullScreen = useRef(true)
   const [slab, setSlab] = useState(0)
@@ -364,7 +364,43 @@ export function ViewerApp() {
     [ready, ensureImages, exitMpr]
   )
 
+  // If the graphics card resets (Windows does this when the GPU is busy too long), WebGL loses
+  // everything and the tiles stay black. Reload the viewer and reopen the same study.
+  useEffect(() => {
+    const onLost = () => {
+      const now = Date.now()
+      let resets = 1
+      try {
+        const last = Number(sessionStorage.getItem('pacs:glResetAt') || 0)
+        resets = now - last < 120_000 ? Number(sessionStorage.getItem('pacs:glResets') || 0) + 1 : 1
+        sessionStorage.setItem('pacs:glResets', String(resets))
+        sessionStorage.setItem('pacs:glResetAt', String(now))
+        if (currentStudyId != null) sessionStorage.setItem('pacs:reopen', String(currentStudyId))
+      } catch {
+        /* storage blocked */
+      }
+      if (resets > 2) {
+        setInitError('The graphics card keeps resetting. Close the viewer and open the images again; if it happens again, update the graphics driver.')
+        return
+      }
+      ui.toast('The graphics card was reset – reopening the images…', 'error')
+      setTimeout(() => location.reload(), 1200)
+    }
+    eventTarget.addEventListener(CoreEnums.Events.WEBGL_CONTEXT_LOST, onLost)
+    return () => eventTarget.removeEventListener(CoreEnums.Events.WEBGL_CONTEXT_LOST, onLost)
+  }, [currentStudyId, ui])
+
   const pendingStudy = useRef<number | null>(null)
+  // After such a reload: open the study that was on screen.
+  useEffect(() => {
+    try {
+      const id = Number(sessionStorage.getItem('pacs:reopen'))
+      sessionStorage.removeItem('pacs:reopen')
+      if (id > 0 && pendingStudy.current == null) pendingStudy.current = id
+    } catch {
+      /* storage blocked */
+    }
+  }, [])
   useEvent(api.onViewerLoadStudy, (studyId: number) => {
     if (!ready) pendingStudy.current = studyId
     else void openStudy(studyId)
@@ -553,11 +589,10 @@ export function ViewerApp() {
     void (async () => {
       try {
         const imgs = imagesRef.current[mpr.seriesId]
-        setMprLoading({ text: 'Building MPR', pct: 0 })
-        const volumeId = await ensureVolume(mpr.seriesId, imgs.imageIds, (pct) => {
-          if (!cancelled) setMprLoading({ text: 'Building MPR', pct })
-        })
+        setMprLoading('Loading images…')
+        const volumeId = await ensureVolume(mpr.seriesId, imgs.imageIds)
         if (cancelled) return
+        setMprLoading('Building volume…')
         await setVolumesForViewports(getEngine(), [{ volumeId }], MPR_IDS)
         getEngine().renderViewports(MPR_IDS)
         setMprLoading(null)

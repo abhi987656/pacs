@@ -27,11 +27,6 @@ import type { DragMode, SliceAxis } from './cs'
 
 export type SlotKind = 'stack' | 'axial' | 'sagittal' | 'coronal'
 
-/** A tile that is still being prepared (e.g. the volume for a coronal view): text and 0–100 %. */
-export interface TileLoading {
-  text: string
-  pct: number | null
-}
 
 export interface SlotInfo {
   id: string
@@ -64,7 +59,8 @@ interface Props {
   seriesLabel: string
   images: SeriesImages | null
   showOverlay: boolean
-  loading: TileLoading | null
+  /** Shown while the tile is being prepared (e.g. the volume for the MPR view). */
+  loading: string | null
   onActivate: () => void
   onDoubleClick: () => void
   onDropSeries: (seriesId: number, studyId: number) => void
@@ -311,23 +307,20 @@ export function Viewport(p: Props) {
     }
   }, [id, kind, p.images])
 
-  // Coronal / sagittal view of the series in this tile (keys 3 and ?): build the series volume
-  // (shown as one percentage); the view appears when it is complete.
-  const [volLoading, setVolLoading] = useState<TileLoading | null>(null)
+  // Coronal / sagittal view of the series in this tile (keys 3 and ?): load the series volume.
+  const [volLoading, setVolLoading] = useState<string | null>(null)
   useEffect(() => {
     if (kind === 'stack' || id.startsWith('mpr-')) return
     const seriesId = p.slot.seriesId
     const imgs = p.images
     if (seriesId == null || !imgs || imgs.imageIds.length === 0) return
     let cancelled = false
-    const label = `Building ${kind} view`
     void (async () => {
       try {
-        setVolLoading({ text: label, pct: 0 })
-        const volumeId = await ensureVolume(seriesId, imgs.imageIds, (pct) => {
-          if (!cancelled) setVolLoading({ text: label, pct })
-        })
+        setVolLoading('Loading images…')
+        const volumeId = await ensureVolume(seriesId, imgs.imageIds)
         if (cancelled) return
+        setVolLoading(`Building ${kind} view…`)
         const vp = getEngine().getViewport(id) as Types.IVolumeViewport | undefined
         if (!vp) return
         await vp.setVolumes([{ volumeId }])
@@ -337,7 +330,7 @@ export function Viewport(p: Props) {
         setVolLoading(null)
       } catch (e) {
         console.error(e)
-        if (!cancelled) setVolLoading({ text: `Could not build the ${kind} view: ${(e as Error).message}`, pct: null })
+        if (!cancelled) setVolLoading(`Could not build the ${kind} view: ${(e as Error).message}`)
       }
     })()
     return () => {
@@ -410,7 +403,7 @@ export function Viewport(p: Props) {
     >
       <div ref={elRef} className="v-element" />
       {!hasImages && <div className="v-empty">Drag a series here, or click a thumbnail above</div>}
-      {(p.loading || volLoading) && <LoadingBox loading={(p.loading ?? volLoading)!} />}
+      {(p.loading || volLoading) && <div className="v-loading">{p.loading || volLoading}</div>}
       {kind !== 'stack' && <div className="mpr-label">{kind.toUpperCase()}</div>}
       {p.scrollLinked && hasImages && <div className="link-badge" title="Linked scrolling (S)">LINK</div>}
       {p.showOverlay && hasImages && s && (
@@ -479,22 +472,6 @@ export function Viewport(p: Props) {
       )}
       {hasImages && ov.total > 1 && !p.loading && !volLoading && (
         <SliceBar index={ov.index} total={ov.total} axis={axis} onSeek={seek} onStep={step} />
-      )}
-    </div>
-  )
-}
-
-function LoadingBox({ loading }: { loading: TileLoading }) {
-  return (
-    <div className="v-loading">
-      <div className="v-loading-text">
-        {loading.text}
-        {loading.pct != null && <b> {loading.pct}%</b>}
-      </div>
-      {loading.pct != null && (
-        <div className="v-loading-bar">
-          <div style={{ width: `${loading.pct}%` }} />
-        </div>
       )}
     </div>
   )
