@@ -134,8 +134,11 @@ a second monitor if you have one)
   plus orientation markers (on X-rays from their Patient Orientation tag; none when it is missing).
 - **Compare with prior** (key **C**): current and previous study side by side, with linked scrolling.
 - **Coronal / sagittal in the same tile**: **3** shows the coronal view (3 again = back to the original
-  axial images), **?** shows the sagittal view (? again = coronal). Window/level is kept.
-- **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs.
+  axial images), **?** shows the sagittal view (? again = coronal). Window/level is kept. A series
+  opened in a coronal / sagittal tile (thumbnail clicked or dragged onto it, Alt+S / Alt+A) is shown
+  in that plane too; a series that can't be reformatted (e.g. a scout) shows its own images.
+- **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs. Click or drag
+  another series onto the MPR view to see that series in MPR (M leaves it, back to the tiles from before).
 - **No dedicated graphics card needed**: MPR / coronal / sagittal also run on built-in graphics
   (Intel UHD / Iris, AMD). Windows lets built-in graphics hold only about 128 MB in one piece, so a
   bigger series (for example a 0.625 mm CT with 500+ images) is reformatted **on the processor**
@@ -240,7 +243,7 @@ How it connects, and what is protected:
 | Scroll bar on the left of the tile | Drag or click to move through the images (H/F, A/P, R/L ends) |
 | Double-click the mouse wheel | Link window/level + zoom between tiles |
 | Alt+drag / Alt+Ctrl+drag / Alt+Shift+drag | Window/level / zoom / pan |
-| Shift+drag / Ctrl+drag | Move / copy a series to another tile |
+| Shift+drag / Ctrl+drag | Move / copy a tile (its series, axial / coronal / sagittal view and window) to another tile |
 | R T A D | Ruler, text, arrow, density value (HU). One use, then back to window/level |
 | G F E H O | Angle, freehand ROI, elliptical ROI, circle ROI, magnifying glass |
 | P | Spine labels: pick the first level, click it, then click above / below for the next ones |

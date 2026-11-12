@@ -249,7 +249,8 @@ export function Viewport(p: Props) {
       return
     }
     if ((e.shiftKey || e.ctrlKey) && !e.altKey) {
-      if (kind === 'stack' && p.slot.seriesId != null) {
+      // Move / copy the tile's view (axial, coronal or sagittal) to another tile; not the MPR tiles.
+      if (p.slot.seriesId != null && !id.startsWith('mpr-')) {
         e.preventDefault()
         e.stopPropagation()
         startSeriesDrag(e.ctrlKey)
@@ -576,7 +577,8 @@ export function Viewport(p: Props) {
       }}
       onDoubleClick={(e) => e.button === 0 && !e.altKey && p.onDoubleClick()}
       onDragOver={(e) => {
-        if (kind !== 'stack') return
+        // A series from the strip can be dropped on any tile: axial, coronal / sagittal or MPR.
+        if (!e.dataTransfer.types.includes('application/x-series')) return
         e.preventDefault()
         setDropping(true)
       }}

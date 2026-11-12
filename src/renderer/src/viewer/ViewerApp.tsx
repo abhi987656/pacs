@@ -225,7 +225,7 @@ const HELP: [string, string][] = [
   ['Right click', 'Image tools menu (presets, tools, layouts …)'],
   ['Alt + drag', 'Window/level (left-right = width, up-down = level)'],
   ['Alt + Ctrl + drag / Alt + Shift + drag', 'Zoom / pan'],
-  ['Shift + drag / Ctrl + drag', 'Move / copy a series to another tile'],
+  ['Shift + drag / Ctrl + drag', 'Move / copy a tile (series, axial / coronal / sagittal view) to another tile'],
   ['Double-click middle button', 'Link window/level + zoom between tiles (same as I)'],
   ['R  T  A  D', 'Ruler, text, arrow, density value (HU)'],
   ['G  F  E  H  O', 'Angle, freehand ROI, elliptical ROI, circle ROI, magnifying glass'],
@@ -540,14 +540,42 @@ export function ViewerApp() {
   }, [ready, shown, seriesMap, thumbs, ensureImages])
 
   // ------------------------------------------------------------ slots / layout
+  /**
+   * Opens a series in a tile (thumbnail click or drop, Alt+S / Alt+A). A tile showing a coronal or
+   * sagittal view keeps that view for the new series (on the graphics card or the processor, as
+   * that series needs); a series that can't be reformatted shows its own images. On the MPR view,
+   * the MPR switches to the new series.
+   */
   const loadIntoSlot = useCallback(
     async (index: number, seriesId: number, studyId: number) => {
-      if (mpr) exitMpr()
-      await ensureImages(seriesId)
-      setSlots((prev) => prev.map((s, i) => (i === index ? { ...s, kind: 'stack', voi: null, seriesId, studyId } : s)))
+      const target = slotsRef.current[index]
+      const m = mprRef.current
+      const imgs = await ensureImages(seriesId)
+      if (m && target?.id.startsWith('mpr-')) {
+        if (seriesId === m.seriesId) return
+        if (!imgs.reconstructable) {
+          ui.toast('This series cannot be reconstructed (needs at least 3 parallel slices of the same size).', 'error')
+          return
+        }
+        const cpu = reformatOnCpu(imgs)
+        setCross(null)
+        setCrossPlanes({})
+        setMpr({ ...m, seriesId, studyId, cpu }) // leaving the MPR still returns to the tiles from before it
+        setSlots(MPR_PLANES.map((k) => ({ id: `mpr-${k}`, kind: k, seriesId, studyId, cpu })))
+        setActive(index)
+        return
+      }
+      if (m) exitMpr()
+      const plane = target && target.kind !== 'stack' ? target.kind : null
+      const keepPlane = !!plane && imgs.reconstructable
+      if (plane && !keepPlane) {
+        ui.toast('This series cannot be shown in other planes (it needs at least 3 parallel slices of the same size): showing its own images.', 'info')
+      }
+      const view: Pick<SlotInfo, 'kind' | 'cpu'> = keepPlane && plane ? { kind: plane, cpu: reformatOnCpu(imgs) } : { kind: 'stack', cpu: false }
+      setSlots((prev) => prev.map((s, i) => (i === index ? { ...s, ...view, voi: null, seriesId, studyId } : s)))
       setActive(index)
     },
-    [ensureImages, mpr, exitMpr]
+    [ensureImages, exitMpr, ui]
   )
 
   const applyLayout = async (rows: number, cols: number) => {
@@ -574,18 +602,28 @@ export function ViewerApp() {
     setActive((a) => Math.min(a, n - 1))
   }
 
-  /** Shift+drag = move (swap) a series between tiles, Ctrl+drag = copy. */
+  /**
+   * Shift+drag = move (swap) what a tile shows to another tile, Ctrl+drag = copy: the series with
+   * its view (axial, coronal or sagittal) and window. Not on the MPR view (its tiles are fixed).
+   */
   const onSeriesDrag = (from: number, to: number, copy: boolean) => {
-    setSlots((prev) => {
-      const a = prev[from]
-      const b = prev[to]
-      if (!a || !b || a.kind !== 'stack' || b.kind !== 'stack') return prev
-      return prev.map((s, i) => {
-        if (i === to) return { ...s, seriesId: a.seriesId, studyId: a.studyId }
-        if (i === from && !copy) return { ...s, seriesId: b.seriesId, studyId: b.studyId }
+    const cur = slotsRef.current
+    const a = cur[from]
+    const b = cur[to]
+    if (!a || !b || a.seriesId == null || a.id.startsWith('mpr-') || b.id.startsWith('mpr-')) return
+    const viewOf = (s: SlotInfo): Partial<SlotInfo> => {
+      const vp = getEngine().getViewport(s.id)
+      return { kind: s.kind, cpu: s.cpu, seriesId: s.seriesId, studyId: s.studyId, voi: (vp ? getVoi(vp) : null) ?? s.voi ?? null }
+    }
+    const va = viewOf(a)
+    const vb = viewOf(b)
+    setSlots((prev) =>
+      prev.map((s, i) => {
+        if (i === to) return { ...s, ...va }
+        if (i === from && !copy) return { ...s, ...vb }
         return s
       })
-    })
+    )
     setActive(to)
   }
 
