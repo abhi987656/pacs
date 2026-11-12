@@ -133,12 +133,16 @@ a second monitor if you have one)
   axial images), **?** shows the sagittal view (? again = coronal). Window/level is kept.
 - **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs.
 - **No dedicated graphics card needed**: MPR / coronal / sagittal also run on built-in graphics
-  (Intel, AMD). A volume is sized to fit the graphics memory: a very long series (for example a
-  1 mm body CT with 1,500 images on built-in graphics) is reformatted from every 2nd or 3rd image –
-  the tile label says so ("CORONAL · every 2nd image"); the original images are unchanged. If
-  Windows still resets the graphics card, the viewer reopens the same study and view by itself with
-  half the memory (and remembers that for this computer). After three resets in two minutes it
-  stops and offers **Try again** (without MPR) and shows the graphics card's name.
+  (Intel UHD / Iris, AMD). Windows lets built-in graphics hold only about 128 MB in one piece, so a
+  bigger series (for example a 0.625 mm CT with 500+ images) is reformatted **on the processor**
+  instead, the way RadiAnt works on modest PCs: every image of the series is used, MIP slabs and the
+  MPR crosshair (click or drag to move it) work as usual, and the planes are plain images, so all
+  measurement tools work on them. Hover the CORONAL / SAGITTAL label to see that a tile is computed
+  this way. Smaller series, and any series on a graphics card with enough memory, still use the
+  graphics card (which can also rotate the MPR planes). If Windows resets the graphics card anyway,
+  the viewer reopens the same study and view by itself and computes such series on the processor
+  from then on (remembered for this computer). After three resets in two minutes it stops and
+  offers **Try again** (without MPR) and shows the graphics card's name.
 - **Scroll bar** on the left of each tile, as on GE / Synapse workstations: its ends show which way the
   slices run (**H**/**F** for axial, **A**/**P** for coronal, **R**/**L** for sagittal). Drag the
   handle or click the bar to move through the images; the image number shows while dragging.
@@ -326,6 +330,12 @@ python scripts/make_test_data.py test-data
 - `src/preload`: the `window.api` bridge.
 - `src/renderer/src/ris`: worklist, report page, templates and settings.
 - `src/renderer/src/viewer`: the viewer window.
+- **Reformatting on the processor** (`src/renderer/src/viewer/reformat.ts`): Cornerstone's MPR
+  uploads a series as one 3D texture (2 bytes per voxel where the card filters 16-bit textures,
+  otherwise 4), and Direct3D 11 only guarantees max(128 MB, ¼ of the card's dedicated memory) per
+  texture. Series above that (`reformatOnCpu` in `cs.ts`) are kept in ordinary memory instead; each
+  axial / coronal / sagittal image (and MIP slab) is computed when it is shown and displayed in a
+  normal stack viewport through a `pacsmpr:` image loader and metadata provider.
 - **Phone sync**: `src/main/phoneLink.ts` is a small HTTP server on the local network (port 47820,
   UDP 47821 for discovery) that only answers paired phones. `src/shared/syncCrypto.ts` holds the
   pairing and encryption code shared by both sides. The database records a revision number on every

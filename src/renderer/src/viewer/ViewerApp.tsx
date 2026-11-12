@@ -61,6 +61,7 @@ import {
   isDragMode,
   lowerVolumeBudget,
   onAnnotationCompleted,
+  reformatOnCpu,
   releaseVolumes,
   setPresentationLink,
   setPrimaryTool,
@@ -72,13 +73,23 @@ import {
   zoomActualSize,
   zoomToFit
 } from './cs'
-import type { DragMode, ToolName, VolumePlan } from './cs'
+import type { DragMode, ToolName } from './cs'
 import { ContextMenu } from './ContextMenu'
 import type { MenuItem } from './ContextMenu'
+import {
+  cpuPlaneIndexAt,
+  cpuPlanePoint,
+  cpuPlaneStack,
+  cpuVolumeCenter,
+  ensureCpuVolume,
+  reformatSeriesOf,
+  releaseCpuVolumes
+} from './reformat'
+import type { Plane, Vec3 } from './reformat'
 import { clearSpineLabels, setSpineNotifier } from './spine'
 import { SpinePanel } from './SpinePanel'
 import { Viewport } from './Viewport'
-import type { SlotInfo } from './Viewport'
+import type { CrossPlane, SlotInfo } from './Viewport'
 
 const api = window.api
 const MPR_IDS = ['mpr-axial', 'mpr-sagittal', 'mpr-coronal']
@@ -167,8 +178,6 @@ function VBtn(p: { title: string; onClick: () => void; active?: boolean; on?: bo
   )
 }
 
-const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`
-
 type ReopenView = { kind: 'mpr' | 'coronal' | 'sagittal'; seriesId: number }
 
 interface MprState {
@@ -176,7 +185,13 @@ interface MprState {
   studyId: number
   prevLayout: { rows: number; cols: number }
   prevSlots: SlotInfo[]
+  /** The planes are computed on the processor (series too big for the graphics card). */
+  cpu: boolean
 }
+
+/** Crosshair line colours of the MPR planes (as Cornerstone draws them on the graphics card). */
+const CROSS_COLOR: Record<Plane, string> = { axial: 'rgb(200, 0, 0)', sagittal: 'rgb(200, 200, 0)', coronal: 'rgb(0, 200, 0)' }
+const MPR_PLANES: Plane[] = ['axial', 'sagittal', 'coronal']
 
 // Hot keys (Fujifilm Synapse layout). Measurement tools apply once, then drop back to
 // window/level, unless locked with L (or chosen from the toolbar).
@@ -267,6 +282,11 @@ export function ViewerApp() {
   const [fps, setFps] = useState(10)
   const [mpr, setMpr] = useState<MprState | null>(null)
   const [mprLoading, setMprLoading] = useState<string | null>(null)
+  // MPR computed on the processor: the crosshair point, and per tile the other two planes' lines.
+  const [cross, setCross] = useState<Vec3 | null>(null)
+  const [crossPlanes, setCrossPlanes] = useState<Record<string, CrossPlane[]>>({})
+  const crossRef = useRef(cross)
+  crossRef.current = cross
   const [fullScreen, setFullScreen] = useState(false)
   const topBeforeFullScreen = useRef(true)
   const [slab, setSlab] = useState(0)
@@ -368,6 +388,8 @@ export function ViewerApp() {
     })
     setSlab(0)
     setMprLoading(null)
+    setCross(null)
+    setCrossPlanes({})
     setTool((t) => (t === 'Crosshairs' ? 'WindowLevel' : t))
   }, [])
 
@@ -569,6 +591,17 @@ export function ViewerApp() {
 
   // ------------------------------------------------------------ linked scrolling
   const onImageChange = useCallback((slotId: string, oldIdx: number, newIdx: number) => {
+    // Processor-computed MPR: the crosshair follows the plane this tile moved to.
+    const m = mprRef.current
+    if (m?.cpu && slotId.startsWith('mpr-')) {
+      const c = crossRef.current
+      const at = cpuPlanePoint(m.seriesId, slotId.slice(4) as Plane, newIdx)
+      if (c && at) {
+        const d = (at.point[0] - c[0]) * at.normal[0] + (at.point[1] - c[1]) * at.normal[1] + (at.point[2] - c[2]) * at.normal[2]
+        if (Math.abs(d) > 1e-6) setCross([c[0] + d * at.normal[0], c[1] + d * at.normal[1], c[2] + d * at.normal[2]])
+      }
+      return
+    }
     const exp = expected.current.get(slotId)
     if (exp !== undefined) {
       expected.current.delete(slotId)
@@ -576,7 +609,8 @@ export function ViewerApp() {
     }
     if (!isLinked(slotId)) return
     const src = slotsRef.current.find((s) => s.id === slotId)
-    if (!src?.seriesId) return
+    // Reformatted planes number their images differently from the series: not linked by position.
+    if (!src?.seriesId || src.kind !== 'stack') return
     const sImgs = imagesRef.current[src.seriesId]
     const engine = getEngine()
     for (const other of slotsRef.current) {
@@ -630,32 +664,16 @@ export function ViewerApp() {
   }, [ready, refLines, refSource, active, slots, mpr])
 
   // ------------------------------------------------------------ volumes (MPR, coronal, sagittal)
-  /** Series whose volume had to be built from fewer images: note shown on its tiles. */
-  const [volumeNotes, setVolumeNotes] = useState<Record<number, string>>({})
-  const toldSeries = useRef(new Set<number>())
-  const onVolumePlan = useCallback(
-    (seriesId: number, plan: VolumePlan) => {
-      if (plan.step <= 1) return
-      const note = `every ${ordinal(plan.step)} image`
-      setVolumeNotes((n) => (n[seriesId] === note ? n : { ...n, [seriesId]: note }))
-      if (toldSeries.current.has(seriesId)) return
-      toldSeries.current.add(seriesId)
-      ui.toast(
-        `This series has ${plan.total} images – more than this computer's graphics memory holds at full detail. ` +
-          `Coronal, sagittal and MPR views use every ${ordinal(plan.step)} image (${plan.used}); the original images are unchanged.`,
-        'info'
-      )
-    },
-    [ui]
-  )
-
-  // Free the graphics memory of volumes no tile shows any more.
+  // Free the memory of series no tile shows as a plane any more (on the graphics card, or the
+  // series kept in memory for planes computed on the processor).
   useEffect(() => {
     if (!ready) return
-    const keep = new Set<number>()
-    if (mpr) keep.add(mpr.seriesId)
-    for (const s of slots) if (s.kind !== 'stack' && s.seriesId != null) keep.add(s.seriesId)
-    releaseVolumes(keep)
+    const onGpu = new Set<number>()
+    const onCpu = new Set<number>()
+    if (mpr) (mpr.cpu ? onCpu : onGpu).add(mpr.seriesId)
+    for (const s of slots) if (s.kind !== 'stack' && s.seriesId != null) (s.cpu ? onCpu : onGpu).add(s.seriesId)
+    releaseVolumes(onGpu)
+    releaseCpuVolumes(onCpu)
   }, [ready, slots, mpr])
 
   // ------------------------------------------------------------ MPR
@@ -670,15 +688,30 @@ export function ViewerApp() {
       ui.toast('This series cannot be reconstructed (needs at least 3 parallel slices of the same size).', 'error')
       return
     }
-    setMpr({ seriesId: slot.seriesId, studyId: slot.studyId, prevLayout: layout, prevSlots: slots })
+    // Series bigger than this graphics card holds in one piece: computed on the processor instead.
+    const cpu = reformatOnCpu(imgs)
+    setMpr({ seriesId: slot.seriesId, studyId: slot.studyId, prevLayout: layout, prevSlots: slots, cpu })
     setLayout({ rows: 1, cols: 3 })
     setMaximized(null)
-    setSlots(
-      (['axial', 'sagittal', 'coronal'] as const).map((k) => ({ id: `mpr-${k}`, kind: k, seriesId: slot.seriesId, studyId: slot.studyId }))
-    )
+    setSlots(MPR_PLANES.map((k) => ({ id: `mpr-${k}`, kind: k, seriesId: slot.seriesId, studyId: slot.studyId, cpu })))
     setActive(0)
     setTool('Crosshairs')
     setLocked(true)
+  }
+
+  /** Processor-computed MPR: the other tiles show the planes through `world` (crosshair click / drag). */
+  const moveCross = (fromId: string, world: Vec3) => {
+    const m = mprRef.current
+    if (!m?.cpu) return
+    setCross(world)
+    for (const k of MPR_PLANES) {
+      const id = `mpr-${k}`
+      if (id === fromId) continue
+      const vp = getEngine().getViewport(id) as Types.IStackViewport | undefined
+      if (!vp || vp.type !== CoreEnums.ViewportType.STACK || !vp.getImageIds().length) continue
+      const target = cpuPlaneIndexAt(m.seriesId, k, world)
+      if (target !== vp.getCurrentImageIdIndex()) void vp.setImageIdIndex(target)
+    }
   }
 
   useEffect(() => {
@@ -688,9 +721,25 @@ export function ViewerApp() {
       try {
         const imgs = imagesRef.current[mpr.seriesId]
         setMprLoading('Loading images…')
+        if (mpr.cpu) {
+          // Each tile shows its own plane (Viewport); here the crosshair starts in the middle.
+          const loaded = await ensureCpuVolume(imgs, (done, total) => {
+            if (!cancelled) setMprLoading(`Loading images… ${Math.floor((done / total) * 100)}%`)
+          })
+          if (cancelled || !loaded) return
+          const normal = Object.fromEntries(MPR_PLANES.map((k) => [k, cpuPlaneStack(mpr.seriesId, k).dir])) as Record<Plane, Vec3>
+          const lines: Record<string, CrossPlane[]> = {}
+          for (const k of MPR_PLANES) {
+            lines[`mpr-${k}`] = MPR_PLANES.filter((o) => o !== k).map((o) => ({ normal: normal[o], color: CROSS_COLOR[o] }))
+          }
+          setCrossPlanes(lines)
+          const center = cpuVolumeCenter(mpr.seriesId)
+          if (center) moveCross('', center)
+          setMprLoading(null)
+          return
+        }
         const plan = await ensureVolume(mpr.seriesId, imgs.imageIds)
         if (cancelled) return
-        onVolumePlan(mpr.seriesId, plan)
         setMprLoading('Building volume…')
         await setVolumesForViewports(getEngine(), [{ volumeId: plan.volumeId }], MPR_IDS)
         getEngine().renderViewports(MPR_IDS)
@@ -710,7 +759,8 @@ export function ViewerApp() {
   }, [mpr?.seriesId])
 
   useEffect(() => {
-    if (!mpr || mprLoading) return
+    // Processor-computed MPR tiles make their MIP images themselves (slab prop).
+    if (!mpr || mpr.cpu || mprLoading) return
     const engine = getEngine()
     for (const id of MPR_IDS) {
       const vp = engine.getViewport(id) as Types.IVolumeViewport | undefined
@@ -759,7 +809,8 @@ export function ViewerApp() {
         /* nothing in progress */
       }
     }
-    setPrimaryTool(tool, !!mpr)
+    // Processor-computed MPR tiles are normal stacks (their crosshair is handled by the Viewport).
+    setPrimaryTool(tool, !!mpr && !mpr.cpu)
   }, [tool, mpr, ready])
 
   const chooseTool = (t: ToolName, lock: boolean) => {
@@ -851,17 +902,20 @@ export function ViewerApp() {
     if (target === 'coronal' && slot.kind === 'coronal') next = 'stack'
     else if (target === 'sagittal' && slot.kind === 'sagittal') next = 'coronal'
     if (next === slot.kind) return
+    // Series bigger than this graphics card holds in one piece: the plane is computed on the processor.
+    let cpu = false
     if (next !== 'stack') {
       const imgs = await ensureImages(slot.seriesId)
       if (!imgs.reconstructable) {
         ui.toast('This series cannot be shown in other planes (it needs at least 3 parallel slices of the same size).', 'error')
         return
       }
+      cpu = reformatOnCpu(imgs)
     }
     const vp = getEngine().getViewport(slot.id)
     const voi = vp ? getVoi(vp) : null
     if (cine) setCine(false)
-    setSlots((prev) => prev.map((s, i) => (i === idx ? { ...s, kind: next, voi: voi ?? s.voi ?? null } : s)))
+    setSlots((prev) => prev.map((s, i) => (i === idx ? { ...s, kind: next, voi: voi ?? s.voi ?? null, cpu } : s)))
   }
 
   const toggleCine = () => {
@@ -922,7 +976,9 @@ export function ViewerApp() {
   const annotationsOfStudy = (studyId: number): csTools.Types.Annotation[] => {
     const images = new Set<string>()
     const frames = new Set<string>()
+    const seriesIds = new Set<number>()
     for (const se of seriesMap[studyId] ?? []) {
+      seriesIds.add(se.id)
       const imgs = imagesRef.current[se.id]
       if (!imgs) continue
       for (const id of imgs.imageIds) images.add(id)
@@ -931,6 +987,9 @@ export function ViewerApp() {
     return csTools.annotation.state.getAllAnnotations().filter((a) => {
       if (!isUserAnnotation(a)) return false
       const ref = a.metadata?.referencedImageId
+      // Measurements on planes computed on the processor belong to the series they came from.
+      const reformatOf = ref ? reformatSeriesOf(ref) : null
+      if (reformatOf != null) return seriesIds.has(reformatOf)
       if (ref) return images.has(ref)
       return !!a.metadata?.FrameOfReferenceUID && frames.has(a.metadata.FrameOfReferenceUID)
     })
@@ -1046,9 +1105,12 @@ export function ViewerApp() {
       final.getContext('2d')!.drawImage(out, 0, 0, final.width, final.height)
     }
     const series = slot.studyId != null ? (seriesMap[slot.studyId] ?? []).find((s) => s.id === slot.seriesId) : undefined
+    // Original images get their number; reformatted planes say which plane they are.
     let imageNo = ''
-    if (vp.type === CoreEnums.ViewportType.STACK) imageNo = `, image ${(vp as Types.IStackViewport).getCurrentImageIdIndex() + 1}`
-    const caption = `${series ? `Series ${series.number ?? ''} ${series.description}`.trim() : slot.kind.toUpperCase()}${imageNo}`
+    if (slot.kind === 'stack' && vp.type === CoreEnums.ViewportType.STACK) imageNo = `, image ${(vp as Types.IStackViewport).getCurrentImageIdIndex() + 1}`
+    const name = series ? `Series ${series.number ?? ''} ${series.description}`.trim() : ''
+    const plane = slot.kind !== 'stack' ? slot.kind : ''
+    const caption = `${[name, plane].filter(Boolean).join(' – ') || 'Image'}${imageNo}`
     return { dataUrl: final.toDataURL(type, 0.9), caption }
   }
 
@@ -1719,8 +1781,11 @@ export function ViewerApp() {
                 showAnnotations={showAnn}
                 scrollLinked={slots.length > 1 && isLinked(slot.id)}
                 loading={slot.id.startsWith('mpr-') ? mprLoading : null}
-                volumeNote={slot.kind !== 'stack' && slot.seriesId != null ? volumeNotes[slot.seriesId] ?? null : null}
-                onVolumePlan={onVolumePlan}
+                slab={mpr?.cpu && slot.id.startsWith('mpr-') ? slab : 0}
+                cross={mpr?.cpu && slot.id.startsWith('mpr-') ? cross : null}
+                crossPlanes={mpr?.cpu ? crossPlanes[slot.id] : undefined}
+                crosshair={!!mpr?.cpu && slot.id.startsWith('mpr-') && tool === 'Crosshairs'}
+                onCross={(w) => moveCross(slot.id, w)}
                 dragMode={isDragMode(tool) ? tool : null}
                 onCycleDragMode={cycleDragMode}
                 onContextMenu={(x, y) => {

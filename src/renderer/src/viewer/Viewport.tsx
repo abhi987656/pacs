@@ -23,11 +23,12 @@ import {
   voiMultiplier,
   zoomBy
 } from './cs'
-import type { DragMode, SliceAxis, VolumePlan } from './cs'
+import type { DragMode, SliceAxis } from './cs'
+import { cpuPlaneIndexAt, cpuPlaneStack, ensureCpuVolume, hasCpuVolume, REFORMAT_SCHEME } from './reformat'
+import type { Vec3 } from './reformat'
 import { SpineLabelTool, spineLevelAt } from './spine'
 
 export type SlotKind = 'stack' | 'axial' | 'sagittal' | 'coronal'
-
 
 export interface SlotInfo {
   id: string
@@ -37,6 +38,17 @@ export interface SlotInfo {
   studyId: number | null
   /** Window/level to keep when the tile switches between original and reformatted views. */
   voi?: { ww: number; wc: number } | null
+  /**
+   * A plane computed on the processor (reformat.ts) and shown as a normal stack, for series too
+   * big for the graphics card; otherwise planes are volume views on the graphics card.
+   */
+  cpu?: boolean
+}
+
+/** Another MPR plane, drawn as a crosshair line on this tile (processor-reformatted MPR). */
+export interface CrossPlane {
+  normal: Vec3
+  color: string
 }
 
 interface OverlayState {
@@ -51,6 +63,8 @@ interface OverlayState {
   dir: [number, number, number] | null
   /** Axial images: the spine level, from labels placed on the sagittal / coronal images. */
   level: string | null
+  /** Crosshair lines (canvas pixels) of processor-reformatted MPR tiles. */
+  lines: { x1: number; y1: number; x2: number; y2: number; color: string }[]
 }
 
 interface Props {
@@ -76,9 +90,14 @@ interface Props {
   onMiddleDoubleClick: () => void
   showAnnotations: boolean
   scrollLinked: boolean
-  /** Coronal / sagittal / MPR built from fewer images to fit the graphics card, e.g. "every 2nd image". */
-  volumeNote?: string | null
-  onVolumePlan?: (seriesId: number, plan: VolumePlan) => void
+  /** Processor-reformatted planes: MIP slab thickness in mm (0 = single image). */
+  slab?: number
+  /** Processor-reformatted MPR: the crosshair point (patient coordinates) and the other planes. */
+  cross?: Vec3 | null
+  crossPlanes?: CrossPlane[]
+  /** The crosshair tool is active on this tile: left click / drag moves the crosshair. */
+  crosshair?: boolean
+  onCross?: (world: Vec3) => void
 }
 
 const ORIENT: Record<Exclude<SlotKind, 'stack'>, Enums.OrientationAxis> = {
@@ -98,7 +117,8 @@ export function Viewport(p: Props) {
     markers: null,
     imageId: undefined,
     dir: null,
-    level: null
+    level: null,
+    lines: []
   })
   const [dropping, setDropping] = useState(false)
   const lastIndex = useRef(0)
@@ -111,6 +131,11 @@ export function Viewport(p: Props) {
   const suppressMenu = useRef(false)
   const lastMiddle = useRef(0)
   const { id, kind } = p.slot
+  /** A plane computed on the processor: shown in a normal stack viewport. */
+  const cpu = kind !== 'stack' && !!p.slot.cpu
+  /** Which way the image number of a processor-reformatted plane grows (for the scroll bar). */
+  const planeDir = useRef<Vec3 | null>(null)
+  const refreshRef = useRef<() => void>(() => {})
 
   // ---------------------------------------------------------------- Synapse-style mouse
   // Left drag = window/level (or zoom/pan); while holding the left button, each right click
@@ -160,6 +185,27 @@ export function Viewport(p: Props) {
     window.addEventListener('mouseup', up, true)
   }
 
+  /** Crosshair tool on a processor-reformatted MPR tile: the point under the mouse becomes the crosshair. */
+  const startCross = (cx: number, cy: number) => {
+    const vp = getEngine().getViewport(id)
+    const el = elRef.current
+    if (!vp || !el) return
+    const at = (x: number, y: number) => {
+      const r = el.getBoundingClientRect()
+      const w = vp.canvasToWorld([x - r.left, y - r.top])
+      propsRef.current.onCross?.([w[0], w[1], w[2]])
+    }
+    at(cx, cy)
+    const move = (ev: MouseEvent) => at(ev.clientX, ev.clientY)
+    const up = (ev: MouseEvent) => {
+      if (ev.button !== 0) return
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up, true)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up, true)
+  }
+
   const startSeriesDrag = (copy: boolean) => {
     document.body.classList.add(copy ? 'dragging-copy' : 'dragging-move')
     const up = (ev: MouseEvent) => {
@@ -196,6 +242,12 @@ export function Viewport(p: Props) {
       return
     }
     if (e.button !== 0) return
+    if (p.crosshair && !e.altKey && !e.shiftKey && !e.ctrlKey) {
+      e.preventDefault()
+      e.stopPropagation()
+      startCross(e.clientX, e.clientY)
+      return
+    }
     if ((e.shiftKey || e.ctrlKey) && !e.altKey) {
       if (kind === 'stack' && p.slot.seriesId != null) {
         e.preventDefault()
@@ -219,14 +271,16 @@ export function Viewport(p: Props) {
     const element = elRef.current
     if (!element) return
     const engine = getEngine()
-    const isStack = kind === 'stack'
+    // Original images, and planes computed on the processor, are stacks; other planes are volume views.
+    const isStack = kind === 'stack' || cpu
     engine.enableElement({
       viewportId: id,
       type: isStack ? Enums.ViewportType.STACK : Enums.ViewportType.ORTHOGRAPHIC,
       element,
-      defaultOptions: isStack ? { background: [0, 0, 0] } : { background: [0, 0, 0], orientation: ORIENT[kind] }
+      defaultOptions: kind === 'stack' || cpu ? { background: [0, 0, 0] } : { background: [0, 0, 0], orientation: ORIENT[kind] }
     })
-    // Tiles of the 3-plane MPR view use the crosshair tools; a single coronal/sagittal tile keeps the normal ones.
+    // Tiles of the 3-plane MPR view on the graphics card use the crosshair tools; every other tile
+    // (a single coronal/sagittal tile, processor-reformatted MPR tiles) keeps the normal ones.
     const group = csTools.ToolGroupManager.getToolGroup(isStack || !id.startsWith('mpr-') ? STACK_TOOLGROUP : MPR_TOOLGROUP)
     group?.addViewport(id, RENDERING_ENGINE_ID)
 
@@ -244,6 +298,7 @@ export function Viewport(p: Props) {
           index = sv.getCurrentImageIdIndex()
           total = sv.getImageIds().length
           imageId = sv.getCurrentImageId()
+          if (cpu) dir = planeDir.current
         } else {
           const vv = vp as Types.IVolumeViewport
           index = vv.getSliceIndex?.() ?? 0
@@ -259,9 +314,21 @@ export function Viewport(p: Props) {
         } catch {
           /* not ready */
         }
-        setOv({ index, total, ww: voi?.ww ?? null, wc: voi?.wc ?? null, zoom, markers: orientationMarkers(vp), imageId, dir, level: spineLevelAt(vp) })
+        setOv({
+          index,
+          total,
+          ww: voi?.ww ?? null,
+          wc: voi?.wc ?? null,
+          zoom,
+          markers: orientationMarkers(vp),
+          imageId,
+          dir,
+          level: spineLevelAt(vp),
+          lines: crossLines(vp)
+        })
       })
     }
+    refreshRef.current = refresh
     const onNewImage = (e: Event) => {
       const detail = (e as CustomEvent<{ imageIdIndex: number }>).detail
       const old = lastIndex.current
@@ -305,8 +372,42 @@ export function Viewport(p: Props) {
       }
       group?.removeViewports(RENDERING_ENGINE_ID, id)
       engine.disableElement(id)
+      refreshRef.current = () => {}
     }
-  }, [id, kind])
+  }, [id, kind, cpu])
+
+  /**
+   * Crosshair of processor-reformatted MPR: where each other plane cuts this one, through the
+   * crosshair point (canvas pixels).
+   */
+  const crossLines = (vp: Types.IViewport): OverlayState['lines'] => {
+    const { cross, crossPlanes } = propsRef.current
+    if (!cross || !crossPlanes?.length) return []
+    try {
+      const n = vp.getCamera().viewPlaneNormal
+      if (!n) return []
+      const out: OverlayState['lines'] = []
+      for (const pl of crossPlanes) {
+        const m = pl.normal
+        // The line runs along both planes: perpendicular to both normals.
+        const u = [n[1] * m[2] - n[2] * m[1], n[2] * m[0] - n[0] * m[2], n[0] * m[1] - n[1] * m[0]]
+        const len = Math.hypot(u[0], u[1], u[2])
+        if (len < 1e-3) continue
+        const far = 2000 / len
+        const a = vp.worldToCanvas([cross[0] + u[0] * far, cross[1] + u[1] * far, cross[2] + u[2] * far])
+        const b = vp.worldToCanvas([cross[0] - u[0] * far, cross[1] - u[1] * far, cross[2] - u[2] * far])
+        out.push({ x1: a[0], y1: a[1], x2: b[0], y2: b[1], color: pl.color })
+      }
+      return out
+    } catch {
+      return []
+    }
+  }
+
+  // The crosshair moved (another tile was clicked or scrolled): redraw its lines here.
+  useEffect(() => {
+    refreshRef.current()
+  }, [p.cross, p.crossPlanes])
 
   // Load the series into a stack viewport.
   useEffect(() => {
@@ -336,10 +437,10 @@ export function Viewport(p: Props) {
     }
   }, [id, kind, p.images])
 
-  // Coronal / sagittal view of the series in this tile (keys 3 and ?): load the series volume.
+  // Coronal / sagittal view of the series in this tile (keys 3 and ?) on the graphics card: load the series volume.
   const [volLoading, setVolLoading] = useState<string | null>(null)
   useEffect(() => {
-    if (kind === 'stack' || id.startsWith('mpr-')) return
+    if (kind === 'stack' || cpu || id.startsWith('mpr-')) return
     const seriesId = p.slot.seriesId
     const imgs = p.images
     if (seriesId == null || !imgs || imgs.imageIds.length === 0) return
@@ -349,7 +450,6 @@ export function Viewport(p: Props) {
         setVolLoading('Loading images…')
         const plan = await ensureVolume(seriesId, imgs.imageIds)
         if (cancelled) return
-        propsRef.current.onVolumePlan?.(seriesId, plan)
         setVolLoading(`Building ${kind} view…`)
         const vp = getEngine().getViewport(id) as Types.IVolumeViewport | undefined
         if (!vp) return
@@ -368,7 +468,59 @@ export function Viewport(p: Props) {
       setVolLoading(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, kind, p.images, p.slot.seriesId])
+  }, [id, kind, cpu, p.images, p.slot.seriesId])
+
+  // A plane computed on the processor (series too big for the graphics card, MPR tiles too): load
+  // the series into memory once, then show the plane's images as a normal stack. A new slab
+  // thickness swaps in the MIP images of the same position, keeping zoom, pan and window.
+  useEffect(() => {
+    if (!cpu) return // (cpu implies a plane, not 'stack')
+    const seriesId = p.slot.seriesId
+    const imgs = p.images
+    if (seriesId == null || !imgs || imgs.imageIds.length === 0) return
+    const plane = kind
+    let cancelled = false
+    void (async () => {
+      try {
+        if (!hasCpuVolume(seriesId)) setVolLoading('Loading images…')
+        const loaded = await ensureCpuVolume(imgs, (done, total) => {
+          if (!cancelled) setVolLoading(`Loading images… ${Math.floor((done / total) * 100)}%`)
+        })
+        if (cancelled || !loaded) return
+        const vp = getEngine().getViewport(id) as Types.IStackViewport | undefined
+        if (!vp) return
+        const stack = cpuPlaneStack(seriesId, plane, propsRef.current.slab ?? 0)
+        planeDir.current = stack.dir
+        const shown = vp.getImageIds()
+        const prefix = `${REFORMAT_SCHEME}:${seriesId}/${plane}/`
+        const sameImages = shown.length === stack.imageIds.length && !!shown[0]?.startsWith(prefix)
+        // Same plane, other slab: keep the position and how the image is shown.
+        const keep = sameImages
+          ? { index: vp.getCurrentImageIdIndex(), voi: getVoi(vp), invert: vp.getProperties().invert, view: vp.getViewPresentation() }
+          : null
+        const cross = propsRef.current.cross
+        const start = keep ? keep.index : cross ? cpuPlaneIndexAt(seriesId, plane, cross) : stack.imageIds.length >> 1
+        await vp.setStack(stack.imageIds, start)
+        if (cancelled) return
+        if (keep) {
+          vp.setViewPresentation(keep.view)
+          if (keep.invert) vp.setProperties({ invert: true })
+          if (keep.voi) applyVoi(vp, keep.voi.ww, keep.voi.wc)
+        } else if (p.slot.voi) applyVoi(vp, p.slot.voi.ww, p.slot.voi.wc)
+        vp.render()
+        setVolLoading(null)
+        refreshRef.current()
+      } catch (e) {
+        console.error(e)
+        if (!cancelled) setVolLoading(`Could not build the ${plane} view: ${(e as Error).message}`)
+      }
+    })()
+    return () => {
+      cancelled = true
+      setVolLoading(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, kind, cpu, p.images, p.slot.seriesId, p.slab])
 
   // Scroll bar: which way the slices run (H/F, A/P or R/L at its ends).
   const stackDir = useMemo(() => {
@@ -385,7 +537,7 @@ export function Viewport(p: Props) {
     const vp = getEngine().getViewport(id)
     if (!vp || ov.total < 2) return
     const i = Math.min(ov.total - 1, Math.max(0, target))
-    if (kind === 'stack') void (vp as Types.IStackViewport).setImageIdIndex(i)
+    if (vp.type === Enums.ViewportType.STACK) void (vp as Types.IStackViewport).setImageIdIndex(i)
     else void csUtils.jumpToSlice(vp.element as HTMLDivElement, { imageIndex: i })
   }
   const step = (delta: number) => {
@@ -435,10 +587,23 @@ export function Viewport(p: Props) {
       {!hasImages && <div className="v-empty">Drag a series here, or click a thumbnail above</div>}
       {(p.loading || volLoading) && <div className="v-loading">{p.loading || volLoading}</div>}
       {kind !== 'stack' && (
-        <div className="mpr-label" title={p.volumeNote ? 'Built from fewer images so that it fits the graphics memory' : undefined}>
+        <div
+          className="mpr-label"
+          title={
+            cpu
+              ? 'Reformatted on the processor from every image of the series (the series is larger than this graphics card holds in one piece)'
+              : undefined
+          }
+        >
           {kind.toUpperCase()}
-          {p.volumeNote ? ` · ${p.volumeNote}` : ''}
         </div>
+      )}
+      {ov.lines.length > 0 && (
+        <svg className="v-cross">
+          {ov.lines.map((l, k) => (
+            <line key={k} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={l.color} strokeWidth={1} />
+          ))}
+        </svg>
       )}
       {p.scrollLinked && hasImages && <div className="link-badge" title="Linked scrolling (S)">LINK</div>}
       {p.showOverlay && hasImages && s && (

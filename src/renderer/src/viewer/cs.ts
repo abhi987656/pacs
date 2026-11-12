@@ -14,7 +14,9 @@ import {
 import type { Types } from '@cornerstonejs/core'
 import { init as dicomLoaderInit, prefetchPart10Instance } from '@cornerstonejs/dicom-image-loader'
 import * as csTools from '@cornerstonejs/tools'
+import type { SeriesImages } from '@shared/types'
 import { CTR4Tool, CTR6Tool, PolygonROITool } from './measureTools'
+import { initReformat } from './reformat'
 import { SpineLabelTool } from './spine'
 
 export const RENDERING_ENGINE_ID = 'pacs-engine'
@@ -170,9 +172,9 @@ export function initCornerstone(): Promise<void> {
 const askText = (done: (text: string) => void) => void textPrompt('Annotation text').then((v) => done(v ?? ''))
 
 async function doInit(): Promise<void> {
-  // Volumes (MPR, coronal, sagittal) go to the graphics card as one 3D texture. Keep it at
-  // 2 bytes per voxel: 16-bit textures where the card has them, otherwise half floats instead
-  // of 4-byte floats (exact for CT numbers up to ±2048, 2 HU steps above).
+  // Volumes (MPR, coronal, sagittal) go to the graphics card as one 3D texture: 16-bit where the
+  // card filters 16-bit textures, otherwise 32-bit floats (vtk.js only falls back to half floats
+  // on cards that cannot filter floats). textureBytesPerVoxel() follows the same rule.
   csInit({ rendering: { preferSizeOverAccuracy: !gpu().norm16 } } as Parameters<typeof csInit>[0])
   dicomLoaderInit({
     maxWebWorkers: Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1)),
@@ -184,6 +186,8 @@ async function doInit(): Promise<void> {
     'cornerstoneStreamingImageVolume',
     cornerstoneStreamingImageVolumeLoader as unknown as Types.VolumeLoaderFn
   )
+  // Coronal / sagittal / MPR images computed on the processor (series too big for the graphics card).
+  initReformat()
   // Keep up to ~1.5 GB of decoded images in memory.
   cache.setMaxCacheSize(1.5 * 1024 * 1024 * 1024)
 
@@ -229,7 +233,10 @@ export function setPrimaryTool(primary: ToolName, mprMode: boolean): void {
     g.setToolPassive(n)
   }
   if (mprMode && !MPR_TOOLS.includes(primary)) primary = 'WindowLevel'
-  if (!isDragMode(primary)) g.setToolActive(toolNameOf(primary), { bindings: [{ mouseButton: MouseBindings.Primary }] })
+  // Crosshairs on processor-reformatted MPR tiles (normal stacks) are handled by the viewer itself.
+  if (!isDragMode(primary) && g.hasTool(toolNameOf(primary))) {
+    g.setToolActive(toolNameOf(primary), { bindings: [{ mouseButton: MouseBindings.Primary }] })
+  }
   g.setToolActive(toolNameOf('StackScroll'), {
     bindings: [{ mouseButton: MouseBindings.Wheel }, { mouseButton: MouseBindings.Auxiliary }]
   })
@@ -559,11 +566,18 @@ export function gpu(): GpuInfo {
 }
 
 const BUDGET_KEY = 'pacs:volumeBudgetMB'
-const DEFAULT_BUDGET_MB: Record<GpuInfo['kind'], number> = { software: 256, integrated: 512, dedicated: 1024 }
+/**
+ * Largest series (MB as a 3D texture, see volumeMB) shown through the graphics card.
+ * Windows (Direct3D 11, which Chromium's WebGL runs on) only guarantees one texture of
+ * max(128 MB, a quarter of the card's dedicated memory), up to 2 GB. Built-in graphics report
+ * about 128 MB of dedicated memory, so they get 128 MB minus a margin; a 500-image CT (250–500 MB)
+ * fails there. Software rendering always reformats on the processor.
+ */
+const DEFAULT_BUDGET_MB: Record<GpuInfo['kind'], number> = { software: 0, integrated: 120, dedicated: 1024 }
 
 /**
- * How much graphics memory one volume may take. Built-in graphics share the computer's RAM and
- * Windows resets the card when it runs out, so they get less; the limit is halved (and
+ * How much graphics memory one volume may take on this card. Bigger series are reformatted on
+ * the processor instead (reformat.ts): same images, nothing left out. The limit is halved (and
  * remembered for this card) each time the card is reset while a volume is shown.
  */
 export function volumeBudgetMB(): number {
@@ -581,10 +595,13 @@ export function volumeBudgetMB(): number {
 /** Largest volume (MB on the graphics card) built since this window opened. */
 let largestVolumeMB = 0
 
-/** The card was reset while volumes were shown: use at most half as much from now on. */
+/**
+ * The card was reset while volumes were shown: use at most half as much from now on (series
+ * above that are reformatted on the processor).
+ */
 export function lowerVolumeBudget(): boolean {
   if (!largestVolumeMB) return false
-  const mb = Math.max(64, Math.floor(Math.min(largestVolumeMB, volumeBudgetMB()) / 2))
+  const mb = Math.max(32, Math.floor(Math.min(largestVolumeMB, volumeBudgetMB()) / 2))
   try {
     localStorage.setItem(BUDGET_KEY, JSON.stringify({ renderer: gpu().renderer, mb }))
   } catch {
@@ -593,34 +610,26 @@ export function lowerVolumeBudget(): boolean {
   return true
 }
 
-export interface VolumePlan {
-  volumeId: string
-  /** 1 = every image; 2 = every 2nd image, … (only for series too big for the graphics card). */
-  step: number
-  /** Images in the series / in the volume. */
-  total: number
-  used: number
+/**
+ * Bytes per voxel of Cornerstone's volume texture: 16-bit (norm16) when the card filters 16-bit
+ * textures – the same test Cornerstone makes – otherwise 32-bit floats.
+ */
+export const textureBytesPerVoxel = (): number => (gpu().norm16 ? 2 : 4)
+
+/** Graphics memory (MB) the series takes as one 3D texture on this card. */
+export function volumeMB(images: SeriesImages): number {
+  return ((images.rows || 512) * (images.cols || 512) * images.imageIds.length * textureBytesPerVoxel()) / 2 ** 20
 }
 
-const MAX_3D_SLICES = 2048 // largest 3D texture depth on Windows (Direct3D 11)
+/**
+ * Coronal / sagittal / MPR of this series are computed on the processor (reformat.ts) instead of
+ * the graphics card: when the series is bigger than one texture may be on this card, or there is
+ * no graphics card. Full detail either way.
+ */
+export const reformatOnCpu = (images: SeriesImages): boolean => volumeMB(images) > volumeBudgetMB()
 
-function planVolume(seriesId: number, imageIds: string[]): VolumePlan & { imageIds: string[]; mb: number } {
-  const first = getNatural(imageIds[0])
-  const rows = Number(first?.Rows) || 512
-  const cols = Number(first?.Columns) || 512
-  const sliceMB = (rows * cols * 2) / 2 ** 20
-  const fit = Math.max(3, Math.min(MAX_3D_SLICES, Math.floor(volumeBudgetMB() / sliceMB)))
-  let step = Math.max(1, Math.ceil(imageIds.length / fit))
-  while (step > 1 && Math.ceil(imageIds.length / step) < 3) step--
-  const ids = step > 1 ? imageIds.filter((_, i) => i % step === 0) : [...imageIds]
-  return {
-    volumeId: `cornerstoneStreamingImageVolume:series-${seriesId}${step > 1 ? `-every${step}` : ''}`,
-    imageIds: ids,
-    step,
-    total: imageIds.length,
-    used: ids.length,
-    mb: ids.length * sliceMB
-  }
+export interface VolumePlan {
+  volumeId: string
 }
 
 const volumesInFlight = new Map<number, Promise<VolumePlan>>()
@@ -628,29 +637,29 @@ const volumesInFlight = new Map<number, Promise<VolumePlan>>()
 const builtVolumes = new Map<string, number>()
 
 /**
- * Builds (once) and caches the 3D volume of a series for MPR / coronal / sagittal views, sized to
- * fit the graphics card. Concurrent callers for the same series share one build. The view is
- * shown straight away and the slices stream into it.
+ * Builds (once) and caches the 3D volume of a series for MPR / coronal / sagittal views on the
+ * graphics card (only for series that fit it, see reformatOnCpu). Concurrent callers for the same
+ * series share one build. The view is shown straight away and the slices stream into it.
  */
 export function ensureVolume(seriesId: number, imageIds: string[]): Promise<VolumePlan> {
   let job = volumesInFlight.get(seriesId)
   if (!job) {
     job = (async () => {
-      await prefetchSeries(imageIds.slice(0, 1), () => {})
-      const plan = planVolume(seriesId, imageIds)
-      if (!cache.getVolume(plan.volumeId)) {
-        await prefetchSeries(plan.imageIds, () => {})
-        if (!cache.getVolume(plan.volumeId)) {
-          // plan.imageIds is a copy: for wadouri ids Cornerstone reverses the array it is given in
-          // place, which would flip the order of the tile's own image list.
-          const volume = await volumeLoader.createAndCacheVolume(plan.volumeId, { imageIds: plan.imageIds })
+      const volumeId = `cornerstoneStreamingImageVolume:series-${seriesId}`
+      if (!cache.getVolume(volumeId)) {
+        await prefetchSeries(imageIds, () => {})
+        if (!cache.getVolume(volumeId)) {
+          // A copy: for wadouri ids Cornerstone reverses the array it is given in place, which
+          // would flip the order of the tile's own image list.
+          const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds: [...imageIds] })
           ;(volume as unknown as { load: () => void }).load()
         }
       }
-      builtVolumes.set(plan.volumeId, seriesId)
-      largestVolumeMB = Math.max(largestVolumeMB, plan.mb)
-      const { volumeId, step, total, used } = plan
-      return { volumeId, step, total, used }
+      const first = getNatural(imageIds[0])
+      const mb = ((Number(first?.Rows) || 512) * (Number(first?.Columns) || 512) * imageIds.length * textureBytesPerVoxel()) / 2 ** 20
+      builtVolumes.set(volumeId, seriesId)
+      largestVolumeMB = Math.max(largestVolumeMB, mb)
+      return { volumeId }
     })().finally(() => volumesInFlight.delete(seriesId))
     volumesInFlight.set(seriesId, job)
   }

@@ -96,6 +96,8 @@ export function buildSeriesImages(seriesId: number, sorted: InstanceRow[], baseU
     positions,
     normal,
     frameOfReferenceUid: first?.forUid ?? '',
-    reconstructable
+    reconstructable,
+    rows: first?.rows ?? 0,
+    cols: first?.cols ?? 0
   }
 }

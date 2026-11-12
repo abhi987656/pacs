@@ -76,6 +76,9 @@ export interface SeriesImages {
   frameOfReferenceUid: string
   // True when the series can be reconstructed in MPR (parallel slices, >= 3 images, same size).
   reconstructable: boolean
+  // Size of the images (of the first one when they differ); 0 when unknown.
+  rows: number
+  cols: number
 }
 
 export interface StudyFilter {
