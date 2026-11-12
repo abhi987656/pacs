@@ -17,6 +17,7 @@ import * as csTools from '@cornerstonejs/tools'
 import type { SeriesImages } from '@shared/types'
 import { CTR4Tool, CTR6Tool, PolygonROITool } from './measureTools'
 import { initReformat } from './reformat'
+import type { Projection } from './reformat'
 import { SpineLabelTool } from './spine'
 
 export const RENDERING_ENGINE_ID = 'pacs-engine'
@@ -368,6 +369,31 @@ export function voiMultiplier(vp: Types.IViewport): number {
     /* fall through */
   }
   return 4
+}
+
+/** Thin slice, or a MIP / MinIP slab, on a plane shown by the graphics card (volume viewport). */
+export function applyProjection(vp: Types.IVolumeViewport, projection: Projection | null | undefined): void {
+  if (projection && projection.mm > 0) {
+    vp.setBlendMode(projection.mode === 'minip' ? Enums.BlendModes.MINIMUM_INTENSITY_BLEND : Enums.BlendModes.MAXIMUM_INTENSITY_BLEND)
+    vp.setSlabThickness(projection.mm)
+  } else {
+    vp.setBlendMode(Enums.BlendModes.COMPOSITE)
+    vp.resetSlabThickness()
+  }
+}
+
+/** Moves a volume view along its normal so that it shows the plane through `at` (pan and zoom stay). */
+export function moveViewTo(vp: Pick<Types.IViewport, 'getCamera' | 'setCamera'>, at: readonly number[]): void {
+  const cam = vp.getCamera()
+  const n = cam.viewPlaneNormal
+  const f = cam.focalPoint
+  const p = cam.position
+  if (!n || !f || !p) return
+  const d = (at[0] - f[0]) * n[0] + (at[1] - f[1]) * n[1] + (at[2] - f[2]) * n[2]
+  vp.setCamera({
+    focalPoint: [f[0] + d * n[0], f[1] + d * n[1], f[2] + d * n[2]],
+    position: [p[0] + d * n[0], p[1] + d * n[1], p[2] + d * n[2]]
+  })
 }
 
 // ------------------------------------------------------------------ camera helpers

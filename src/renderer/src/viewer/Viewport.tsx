@@ -7,11 +7,13 @@ import { formatAge, formatDicomDate, formatDicomDateTime, formatSex } from '@sha
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import {
   annotationNear,
+  applyProjection,
   applyVoi,
   ensureVolume,
   getEngine,
   getNatural,
   getVoi,
+  moveViewTo,
   MPR_TOOLGROUP,
   num,
   orientationMarkers,
@@ -24,8 +26,8 @@ import {
   zoomBy
 } from './cs'
 import type { DragMode, SliceAxis } from './cs'
-import { cpuPlaneIndexAt, cpuPlaneStack, ensureCpuVolume, hasCpuVolume, REFORMAT_SCHEME } from './reformat'
-import type { Vec3 } from './reformat'
+import { cpuPlaneIndexAt, cpuPlaneStack, ensureCpuVolume, hasCpuVolume, projectionLabel, REFORMAT_SCHEME } from './reformat'
+import type { Projection, Vec3 } from './reformat'
 import { SpineLabelTool, spineLevelAt } from './spine'
 
 export type SlotKind = 'stack' | 'axial' | 'sagittal' | 'coronal'
@@ -43,6 +45,10 @@ export interface SlotInfo {
    * big for the graphics card; otherwise planes are volume views on the graphics card.
    */
   cpu?: boolean
+  /** Thick slab of this tile: MIP / MinIP (planes only; 'axial' = a thick-slab axial reformat). */
+  slab?: Projection | null
+  /** Where to start when the tile's view is (re)built: a point of the plane to show (patient coordinates). */
+  at?: Vec3 | null
 }
 
 /** Another MPR plane, drawn as a crosshair line on this tile (processor-reformatted MPR). */
@@ -90,14 +96,29 @@ interface Props {
   onMiddleDoubleClick: () => void
   showAnnotations: boolean
   scrollLinked: boolean
-  /** Processor-reformatted planes: MIP slab thickness in mm (0 = single image). */
-  slab?: number
+  /** Thin, or a MIP / MinIP slab (planes: the tile's own, or the MPR view's). */
+  projection?: Projection | null
   /** Processor-reformatted MPR: the crosshair point (patient coordinates) and the other planes. */
   cross?: Vec3 | null
   crossPlanes?: CrossPlane[]
   /** The crosshair tool is active on this tile: left click / drag moves the crosshair. */
   crosshair?: boolean
   onCross?: (world: Vec3) => void
+}
+
+/** Index of the image whose position along the slice normal is nearest to `target` (0 if none is known). */
+function nearestPosition(positions: (number | null)[], target: number): number {
+  let best = 0
+  let bestD = Infinity
+  positions.forEach((pos, i) => {
+    if (pos == null) return
+    const d = Math.abs(pos - target)
+    if (d < bestD) {
+      bestD = d
+      best = i
+    }
+  })
+  return best
 }
 
 const ORIENT: Record<Exclude<SlotKind, 'stack'>, Enums.OrientationAxis> = {
@@ -133,6 +154,8 @@ export function Viewport(p: Props) {
   const { id, kind } = p.slot
   /** A plane computed on the processor: shown in a normal stack viewport. */
   const cpu = kind !== 'stack' && !!p.slot.cpu
+  /** The thick slab as a value for effect dependencies ('' = thin). */
+  const projKey = p.projection && p.projection.mm > 0 ? `${p.projection.mode}:${p.projection.mm}` : ''
   /** Which way the image number of a processor-reformatted plane grows (for the scroll bar). */
   const planeDir = useRef<Vec3 | null>(null)
   const refreshRef = useRef<() => void>(() => {})
@@ -426,9 +449,13 @@ export function Viewport(p: Props) {
     if (!vp || !element) return
     if (!p.images || p.images.imageIds.length === 0) return
     let cancelled = false
-    lastIndex.current = 0
+    // Coming back from a thick-slab axial view (or moved from another tile): the image at that level.
+    const at = p.slot.at
+    const n = p.images.normal
+    const start = at && n ? nearestPosition(p.images.positions, at[0] * n[0] + at[1] * n[1] + at[2] * n[2]) : 0
+    lastIndex.current = start
     void vp
-      .setStack(p.images.imageIds, 0)
+      .setStack(p.images.imageIds, start)
       .then(() => {
         if (cancelled) return
         if (p.slot.voi) applyVoi(vp, p.slot.voi.ww, p.slot.voi.wc)
@@ -463,6 +490,8 @@ export function Viewport(p: Props) {
         if (!vp) return
         await vp.setVolumes([{ volumeId: plan.volumeId }])
         if (cancelled) return
+        if (p.slot.at) moveViewTo(vp, p.slot.at) // e.g. axial images -> thick-slab axial at the same level
+        applyProjection(vp, propsRef.current.projection)
         if (p.slot.voi) applyVoi(vp as unknown as Types.IViewport, p.slot.voi.ww, p.slot.voi.wc)
         vp.render()
         setVolLoading(null)
@@ -477,6 +506,15 @@ export function Viewport(p: Props) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, kind, cpu, p.images, p.slot.seriesId])
+
+  // MIP / MinIP chosen for a plane on the graphics card (the MPR view sets its own tiles).
+  useEffect(() => {
+    if (kind === 'stack' || cpu || id.startsWith('mpr-')) return
+    const vp = getEngine().getViewport(id) as Types.IVolumeViewport | undefined
+    if (!vp || !vp.getActors().length) return // still loading: applied when the volume is set
+    applyProjection(vp, propsRef.current.projection)
+    vp.render()
+  }, [id, kind, cpu, projKey])
 
   // A plane computed on the processor (series too big for the graphics card, MPR tiles too): load
   // the series into memory once, then show the plane's images as a normal stack. A new slab
@@ -497,7 +535,7 @@ export function Viewport(p: Props) {
         if (cancelled || !loaded) return
         const vp = getEngine().getViewport(id) as Types.IStackViewport | undefined
         if (!vp) return
-        const stack = cpuPlaneStack(seriesId, plane, propsRef.current.slab ?? 0)
+        const stack = cpuPlaneStack(seriesId, plane, propsRef.current.projection ?? null)
         planeDir.current = stack.dir
         const shown = vp.getImageIds()
         const prefix = `${REFORMAT_SCHEME}:${seriesId}/${plane}/`
@@ -506,8 +544,9 @@ export function Viewport(p: Props) {
         const keep = sameImages
           ? { index: vp.getCurrentImageIdIndex(), voi: getVoi(vp), invert: vp.getProperties().invert, view: vp.getViewPresentation() }
           : null
-        const cross = propsRef.current.cross
-        const start = keep ? keep.index : cross ? cpuPlaneIndexAt(seriesId, plane, cross) : stack.imageIds.length >> 1
+        // Otherwise: the level asked for (e.g. axial images -> thick-slab axial), the MPR crosshair, or the middle.
+        const at = p.slot.at ?? propsRef.current.cross
+        const start = keep ? keep.index : at ? cpuPlaneIndexAt(seriesId, plane, at) : stack.imageIds.length >> 1
         await vp.setStack(stack.imageIds, start)
         if (cancelled) return
         if (keep) {
@@ -528,7 +567,7 @@ export function Viewport(p: Props) {
       setVolLoading(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, kind, cpu, p.images, p.slot.seriesId, p.slab])
+  }, [id, kind, cpu, p.images, p.slot.seriesId, projKey])
 
   // Scroll bar: which way the slices run (H/F, A/P or R/L at its ends).
   const stackDir = useMemo(() => {
@@ -605,6 +644,7 @@ export function Viewport(p: Props) {
           }
         >
           {kind.toUpperCase()}
+          {p.projection && p.projection.mm > 0 ? ` · ${projectionLabel(p.projection)}` : ''}
         </div>
       )}
       {ov.lines.length > 0 && (

@@ -137,14 +137,20 @@ a second monitor if you have one)
   axial images), **?** shows the sagittal view (? again = coronal). Window/level is kept. A series
   opened in a tile – thumbnail clicked, or dragged onto any tile including a coronal / sagittal one,
   Alt+S / Alt+A – always shows its own (axial) images; press 3 / ? for its other planes.
-- **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs. Opening another
-  series while the MPR view is shown leaves the MPR and shows that series' axial images in the tile
-  the MPR was started from.
+- **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP / MinIP slabs. Opening
+  another series while the MPR view is shown leaves the MPR and shows that series' axial images in
+  the tile the MPR was started from.
+- **MIP / MinIP** (slab menu in the toolbar, or right-click › MIP / MinIP): a 5–50 mm thick slab
+  showing the brightest values through it (MIP: vessels, nodules) or the darkest (MinIP: airways,
+  emphysema). It applies to the active tile – coronal / sagittal views, or axial images, which then
+  show as a thick-slab axial view at the same level (**Thin** goes back to the original images
+  there) – or, in the MPR view, to all three planes. The tile label says which ("CORONAL · MinIP
+  10 mm"); the slab stays with the tile when you switch it between planes (3 / ?).
 - **No dedicated graphics card needed**: MPR / coronal / sagittal also run on built-in graphics
   (Intel UHD / Iris, AMD). Windows lets built-in graphics hold only about 128 MB in one piece, so a
   bigger series (for example a 0.625 mm CT with 500+ images) is reformatted **on the processor**
-  instead, the way RadiAnt works on modest PCs: every image of the series is used, MIP slabs and the
-  MPR crosshair (click or drag to move it) work as usual, and the planes are plain images, so all
+  instead, the way RadiAnt works on modest PCs: every image of the series is used, MIP / MinIP slabs
+  and the MPR crosshair (click or drag to move it) work as usual, and the planes are plain images, so all
   measurement tools work on them. Hover the CORONAL / SAGITTAL label to see that a tile is computed
   this way. Smaller series, and any series on a graphics card with enough memory, still use the
   graphics card (which can also rotate the MPR planes). If Windows resets the graphics card anyway,
@@ -342,7 +348,7 @@ python scripts/make_test_data.py test-data
   uploads a series as one 3D texture (2 bytes per voxel where the card filters 16-bit textures,
   otherwise 4), and Direct3D 11 only guarantees max(128 MB, ¼ of the card's dedicated memory) per
   texture. Series above that (`reformatOnCpu` in `cs.ts`) are kept in ordinary memory instead; each
-  axial / coronal / sagittal image (and MIP slab) is computed when it is shown and displayed in a
+  axial / coronal / sagittal image (and MIP / MinIP slab) is computed when it is shown and displayed in a
   normal stack viewport through a `pacsmpr:` image loader and metadata provider.
 - **Phone sync**: `src/main/phoneLink.ts` is a small HTTP server on the local network (port 47820,
   UDP 47821 for discovery) that only answers paired phones. `src/shared/syncCrypto.ts` holds the

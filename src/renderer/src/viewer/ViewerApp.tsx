@@ -49,6 +49,7 @@ import type { SeriesImages, SeriesRow, StudyRow } from '@shared/types'
 import { formatAge, formatDicomDate, formatDicomDateTime, formatDicomTime, formatSex } from '@shared/format'
 import { Modal, useEvent, useUi } from '../common/ui'
 import {
+  applyProjection,
   applyVoi,
   CT_PRESETS,
   DRAG_MODES,
@@ -82,10 +83,12 @@ import {
   cpuPlaneStack,
   cpuVolumeCenter,
   ensureCpuVolume,
+  PROJECTION_MM,
+  projectionLabel,
   reformatSeriesOf,
   releaseCpuVolumes
 } from './reformat'
-import type { Plane, Vec3 } from './reformat'
+import type { Plane, Projection, Vec3 } from './reformat'
 import { clearSpineLabels, setSpineNotifier } from './spine'
 import { SpinePanel } from './SpinePanel'
 import { Viewport } from './Viewport'
@@ -244,6 +247,7 @@ const HELP: [string, string][] = [
   ['N / M', 'Cine / MPR (axial, sagittal, coronal)'],
   ['Number pad 1 – 9, 0', 'Window presets, 0 = original (Num Lock on or off)'],
   ['3 / ?', 'Coronal / sagittal view of the tile; press again to go back (3 = axial, ? = coronal)'],
+  ['Slab menu (toolbar) / right-click › MIP / MinIP', 'Thick slab: MIP (brightest) or MinIP (darkest), 5–50 mm, on the active tile or the MPR view'],
   ['Home / End, PgUp / PgDn, arrows', 'First / last image, ±10 images, ±1 image'],
   ['F5', 'Reset the image'],
   ['Shift+T / Shift+A / Shift+I', 'Text overlay / annotations / invert'],
@@ -291,7 +295,8 @@ export function ViewerApp() {
   crossRef.current = cross
   const [fullScreen, setFullScreen] = useState(false)
   const topBeforeFullScreen = useRef(true)
-  const [slab, setSlab] = useState(0)
+  /** Thin, or a MIP / MinIP slab, for the three tiles of the MPR view. */
+  const [mprProj, setMprProj] = useState<Projection | null>(null)
   const [help, setHelp] = useState(false)
   const [info, setInfo] = useState(false)
   const [notes, setNotes] = useState<string | null>(null)
@@ -388,7 +393,7 @@ export function ViewerApp() {
       setActive(m.fromIndex)
     }
     setMpr(null)
-    setSlab(0)
+    setMprProj(null)
     setMprLoading(null)
     setCross(null)
     setCrossPlanes({})
@@ -553,7 +558,7 @@ export function ViewerApp() {
       const m = mprRef.current
       const at = m ? m.fromIndex : index
       if (m) exitMpr()
-      setSlots((prev) => prev.map((s, i) => (i === at ? { ...s, kind: 'stack', cpu: false, voi: null, seriesId, studyId } : s)))
+      setSlots((prev) => prev.map((s, i) => (i === at ? { ...s, kind: 'stack', cpu: false, slab: null, at: null, voi: null, seriesId, studyId } : s)))
       setActive(at)
     },
     [ensureImages, exitMpr]
@@ -594,7 +599,16 @@ export function ViewerApp() {
     if (!a || !b || a.seriesId == null || a.id.startsWith('mpr-') || b.id.startsWith('mpr-')) return
     const viewOf = (s: SlotInfo): Partial<SlotInfo> => {
       const vp = getEngine().getViewport(s.id)
-      return { kind: s.kind, cpu: s.cpu, seriesId: s.seriesId, studyId: s.studyId, voi: (vp ? getVoi(vp) : null) ?? s.voi ?? null }
+      const f = vp?.getCamera().focalPoint
+      return {
+        kind: s.kind,
+        cpu: s.cpu,
+        slab: s.slab ?? null,
+        seriesId: s.seriesId,
+        studyId: s.studyId,
+        voi: (vp ? getVoi(vp) : null) ?? s.voi ?? null,
+        at: f ? [f[0], f[1], f[2]] : null // the moved view opens at the same image / level
+      }
     }
     const va = viewOf(a)
     const vb = viewOf(b)
@@ -778,22 +792,60 @@ export function ViewerApp() {
   }, [mpr?.seriesId])
 
   useEffect(() => {
-    // Processor-computed MPR tiles make their MIP images themselves (slab prop).
+    // Processor-computed MPR tiles make their MIP / MinIP images themselves (projection prop).
     if (!mpr || mpr.cpu || mprLoading) return
     const engine = getEngine()
     for (const id of MPR_IDS) {
       const vp = engine.getViewport(id) as Types.IVolumeViewport | undefined
-      if (!vp) continue
-      if (slab > 0) {
-        vp.setBlendMode(CoreEnums.BlendModes.MAXIMUM_INTENSITY_BLEND)
-        vp.setSlabThickness(slab)
-      } else {
-        vp.setBlendMode(CoreEnums.BlendModes.COMPOSITE)
-        vp.resetSlabThickness()
-      }
+      if (vp) applyProjection(vp, mprProj)
     }
     engine.renderViewports(MPR_IDS)
-  }, [slab, mpr, mprLoading])
+  }, [mprProj, mpr, mprLoading])
+
+  /**
+   * Thin / MIP / MinIP: for the three tiles of the MPR view, or for the active tile. Original axial
+   * images become a thick-slab axial reformat at the same level (Thin returns to the images there).
+   */
+  const setProjection = async (proj: Projection | null) => {
+    if (mpr) {
+      setMprProj(proj)
+      return
+    }
+    const idx = active
+    const slot = slotsRef.current[idx]
+    if (!slot?.seriesId || slot.studyId == null) {
+      ui.toast('Select a tile with a series first.', 'info')
+      return
+    }
+    if (slot.kind === 'stack' && !proj) return
+    const vp = getEngine().getViewport(slot.id)
+    const f = vp?.getCamera().focalPoint
+    const at: Vec3 | null = f ? [f[0], f[1], f[2]] : null
+    const voi = (vp ? getVoi(vp) : null) ?? slot.voi ?? null
+    if (slot.kind === 'stack') {
+      const imgs = await ensureImages(slot.seriesId)
+      if (!imgs.reconstructable) {
+        ui.toast('MIP / MinIP needs a series of at least 3 parallel slices of the same size.', 'error')
+        return
+      }
+      if (cine) setCine(false)
+      setSlots((prev) => prev.map((s, i) => (i === idx ? { ...s, kind: 'axial', cpu: reformatOnCpu(imgs), slab: proj, at, voi } : s)))
+      return
+    }
+    if (slot.kind === 'axial' && !proj) {
+      setSlots((prev) => prev.map((s, i) => (i === idx ? { ...s, kind: 'stack', cpu: false, slab: null, at, voi } : s)))
+      return
+    }
+    setSlots((prev) => prev.map((s, i) => (i === idx ? { ...s, slab: proj } : s)))
+  }
+
+  /** The active tile's (or the MPR view's) thick slab, for the menus. */
+  const currentProj = (): Projection | null => (mpr ? mprProj : slots[active]?.slab ?? null)
+  const projValue = (p: Projection | null) => (p && p.mm > 0 ? `${p.mode}:${p.mm}` : '')
+  const parseProj = (v: string): Projection | null => {
+    const [mode, mm] = v.split(':')
+    return (mode === 'mip' || mode === 'minip') && Number(mm) > 0 ? { mode, mm: Number(mm) } : null
+  }
 
   useEffect(() => {
     const want = reopenView
@@ -933,8 +985,14 @@ export function ViewerApp() {
     }
     const vp = getEngine().getViewport(slot.id)
     const voi = vp ? getVoi(vp) : null
+    // From a thick-slab axial view back to the original images: at the same level.
+    const f = slot.kind === 'axial' && next === 'stack' ? vp?.getCamera().focalPoint : undefined
+    const at: Vec3 | null = f ? [f[0], f[1], f[2]] : null
     if (cine) setCine(false)
-    setSlots((prev) => prev.map((s, i) => (i === idx ? { ...s, kind: next, voi: voi ?? s.voi ?? null, cpu } : s)))
+    // A MIP / MinIP slab stays with the tile in the other planes; the original images have none.
+    setSlots((prev) =>
+      prev.map((s, i) => (i === idx ? { ...s, kind: next, voi: voi ?? s.voi ?? null, cpu, slab: next === 'stack' ? null : s.slab ?? null, at } : s))
+    )
   }
 
   const toggleCine = () => {
@@ -1128,7 +1186,8 @@ export function ViewerApp() {
     let imageNo = ''
     if (slot.kind === 'stack' && vp.type === CoreEnums.ViewportType.STACK) imageNo = `, image ${(vp as Types.IStackViewport).getCurrentImageIdIndex() + 1}`
     const name = series ? `Series ${series.number ?? ''} ${series.description}`.trim() : ''
-    const plane = slot.kind !== 'stack' ? slot.kind : ''
+    const proj = slot.id.startsWith('mpr-') ? mprProj : slot.slab
+    const plane = slot.kind !== 'stack' ? `${slot.kind}${proj && proj.mm > 0 ? ` ${projectionLabel(proj)}` : ''}` : ''
     const caption = `${[name, plane].filter(Boolean).join(' – ') || 'Image'}${imageNo}`
     return { dataUrl: final.toDataURL(type, 0.9), caption }
   }
@@ -1541,6 +1600,21 @@ export function ViewerApp() {
         { label: 'Coronal', hint: '3', checked: slots[active]?.kind === 'coronal', onClick: () => void reformatActive('coronal') },
         { label: 'Sagittal', hint: '?', checked: slots[active]?.kind === 'sagittal', onClick: () => void reformatActive('sagittal') }
       ]
+    },
+    {
+      label: 'MIP / MinIP',
+      submenu: [
+        { label: 'Thin', checked: !currentProj(), onClick: () => void setProjection(null) },
+        'sep',
+        ...(['mip', 'minip'] as const).flatMap((mode, k) => [
+          ...(k ? (['sep'] as const) : []),
+          ...PROJECTION_MM.map((mm) => ({
+            label: projectionLabel({ mode, mm }),
+            checked: currentProj()?.mode === mode && currentProj()?.mm === mm,
+            onClick: () => void setProjection({ mode, mm })
+          }))
+        ])
+      ]
     }
   ]
 
@@ -1706,19 +1780,29 @@ export function ViewerApp() {
         <VBtn title="MPR view – axial / sagittal / coronal (M)" on={!!mpr} onClick={() => void (mpr ? exitMpr() : enterMpr())}>
           <Box size={17} /> MPR
         </VBtn>
-        {mpr && (
-          <>
-            {toolBtn('Crosshairs', 'Crosshairs', <Crosshair size={17} />)}
-            <select className="v-select" title="MIP slab thickness" value={slab} onChange={(e) => setSlab(Number(e.target.value))}>
-              <option value={0}>Thin (no MIP)</option>
-              {[5, 10, 15, 20, 30, 50].map((t) => (
-                <option key={t} value={t}>
-                  MIP {t} mm
-                </option>
-              ))}
-            </select>
-          </>
-        )}
+        {mpr && toolBtn('Crosshairs', 'Crosshairs', <Crosshair size={17} />)}
+        <select
+          className="v-select"
+          title={`Thick slab: MIP (brightest) or MinIP (darkest) through the slab – ${mpr ? 'all three MPR planes' : 'the active tile'}`}
+          value={projValue(currentProj())}
+          onChange={(e) => void setProjection(parseProj(e.target.value))}
+        >
+          <option value="">Thin</option>
+          <optgroup label="MIP">
+            {PROJECTION_MM.map((t) => (
+              <option key={`mip${t}`} value={`mip:${t}`}>
+                MIP {t} mm
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="MinIP">
+            {PROJECTION_MM.map((t) => (
+              <option key={`minip${t}`} value={`minip:${t}`}>
+                MinIP {t} mm
+              </option>
+            ))}
+          </optgroup>
+        </select>
         <VBtn title="Linked scrolling (S) – K adds/removes this tile" on={scrollLink} onClick={toggleScrollLink}>
           <Link2 size={17} />
         </VBtn>
@@ -1800,7 +1884,7 @@ export function ViewerApp() {
                 showAnnotations={showAnn}
                 scrollLinked={slots.length > 1 && isLinked(slot.id)}
                 loading={slot.id.startsWith('mpr-') ? mprLoading : null}
-                slab={mpr?.cpu && slot.id.startsWith('mpr-') ? slab : 0}
+                projection={slot.id.startsWith('mpr-') ? mprProj : slot.slab ?? null}
                 cross={mpr?.cpu && slot.id.startsWith('mpr-') ? cross : null}
                 crossPlanes={mpr?.cpu ? crossPlanes[slot.id] : undefined}
                 crosshair={!!mpr?.cpu && slot.id.startsWith('mpr-') && tool === 'Crosshairs'}

@@ -18,6 +18,16 @@ import type { SeriesImages } from '@shared/types'
 
 export type Plane = 'axial' | 'coronal' | 'sagittal'
 export type Vec3 = [number, number, number]
+
+/** Thick slab: the brightest (MIP) or darkest (MinIP) value through `mm` millimetres. */
+export type ProjectionMode = 'mip' | 'minip'
+export interface Projection {
+  mode: ProjectionMode
+  mm: number
+}
+/** Slab thicknesses offered for MIP / MinIP. */
+export const PROJECTION_MM = [5, 10, 15, 20, 30, 50]
+export const projectionLabel = (p: Projection): string => `${p.mode === 'minip' ? 'MinIP' : 'MIP'} ${p.mm} mm`
 type Scalars = Int16Array | Uint16Array | Uint8Array | Float32Array
 type ScalarsCtor = Int16ArrayConstructor | Uint16ArrayConstructor | Uint8ArrayConstructor | Float32ArrayConstructor
 
@@ -437,8 +447,8 @@ function slabSpan(g: PlaneGeometry, slabMm: number): [number, number] {
   return [before, k - 1 - before]
 }
 
-/** Pixels of image `n` of a plane; with a slab, the brightest value through it (MIP). */
-function pixelsOf(v: CpuVolume, g: PlaneGeometry, n: number, slabMm: number): { px: Scalars; min: number; max: number } {
+/** Pixels of image `n` of a plane; with a slab, the brightest (MIP) or darkest (MinIP) value through it. */
+function pixelsOf(v: CpuVolume, g: PlaneGeometry, n: number, slabMm: number, mode: ProjectionMode = 'mip'): { px: Scalars; min: number; max: number } {
   const [R, D, N] = g.tables
   const { cols, rows } = g
   const [before, after] = slabSpan(g, slabMm)
@@ -448,6 +458,7 @@ function pixelsOf(v: CpuVolume, g: PlaneGeometry, n: number, slabMm: number): { 
   const Out = data.constructor as ScalarsCtor
   const out = new Out(rows * cols)
   const whole = !(out instanceof Float32Array)
+  const darkest = mode === 'minip'
   let min = Infinity
   let max = -Infinity
   // Straight copy of an original slice (axial view of an axial series, regular spacing).
@@ -469,13 +480,13 @@ function pixelsOf(v: CpuVolume, g: PlaneGeometry, n: number, slabMm: number): { 
       const base = R.off[c] + dOff
       const rNext = R.next[c] + dNext
       const rW = R.w[c] + dW
-      let best = -Infinity
+      let best = darkest ? Infinity : -Infinity
       for (let t = t0; t <= t1; t++) {
         const o = base + N.off[t]
         // Only the slice axis has a second slice and a weight; the others add zero.
         const w = rW + N.w[t]
         const x = w === 0 ? data[o] : data[o] + (data[o + rNext + N.next[t]] - data[o]) * w
-        if (x > best) best = x
+        if (darkest ? x < best : x > best) best = x
       }
       const x = whole ? Math.round(best) : best
       out[line + c] = x
@@ -491,14 +502,19 @@ interface Ref {
   plane: Plane
   /** Slab thickness in tenths of a mm (0 = single image). */
   slab: number
+  mode: ProjectionMode
   n: number
 }
 
-const ID_RE = new RegExp(`^${REFORMAT_SCHEME}:(\\d+)/(axial|coronal|sagittal)/(\\d+)/(\\d+)$`)
+// pacsmpr:<series>/<plane>/<slab>/<image>; slab = 0 (single image), mip<tenths> or minip<tenths>
+// (a bare number is a MIP, as written before MinIP existed).
+const ID_RE = new RegExp(`^${REFORMAT_SCHEME}:(\\d+)/(axial|coronal|sagittal)/(mip|minip)?(\\d+)/(\\d+)$`)
 
 function parseId(imageId: string): Ref | null {
   const m = ID_RE.exec(imageId)
-  return m ? { seriesId: Number(m[1]), plane: m[2] as Plane, slab: Number(m[3]), n: Number(m[4]) } : null
+  return m
+    ? { seriesId: Number(m[1]), plane: m[2] as Plane, mode: (m[3] as ProjectionMode | undefined) ?? 'mip', slab: Number(m[4]), n: Number(m[5]) }
+    : null
 }
 
 export const isReformatImageId = (imageId: string | undefined): boolean => !!imageId && imageId.startsWith(`${REFORMAT_SCHEME}:`)
@@ -514,12 +530,13 @@ export interface PlaneStack {
   step: number
 }
 
-/** The images of one plane of a loaded series (computed only when shown). */
-export function cpuPlaneStack(seriesId: number, plane: Plane, slabMm = 0): PlaneStack {
+/** The images of one plane of a loaded series (computed only when shown); thin, or a MIP / MinIP slab. */
+export function cpuPlaneStack(seriesId: number, plane: Plane, projection: Projection | null = null): PlaneStack {
   const v = volumes.get(seriesId)
   if (!v) throw new Error('The series is not loaded for reformatting')
   const g = geometryOf(v, plane)
-  const slab = Math.max(0, Math.round(slabMm * 10))
+  const tenths = projection ? Math.max(0, Math.round(projection.mm * 10)) : 0
+  const slab = tenths > 0 && projection ? `${projection.mode}${tenths}` : '0'
   return {
     imageIds: Array.from({ length: g.count }, (_, n) => `${REFORMAT_SCHEME}:${seriesId}/${plane}/${slab}/${n}`),
     dir: g.dir,
@@ -563,7 +580,7 @@ function loadReformatImage(imageId: string): { promise: Promise<Types.IImage> } 
       if (!ref || !v) throw new Error(`Reformatted image ${imageId} is not available`)
       const g = geometryOf(v, ref.plane)
       if (ref.n >= g.count) throw new Error(`Reformatted image ${imageId} is out of range`)
-      const { px, min, max } = pixelsOf(v, g, ref.n, ref.slab / 10)
+      const { px, min, max } = pixelsOf(v, g, ref.n, ref.slab / 10, ref.mode)
       const voxelManager = csUtils.VoxelManager.createImageVoxelManager({ width: g.cols, height: g.rows, numberOfComponents: 1, scalarData: px })
       v.made.add(imageId)
       const image = {
