@@ -229,7 +229,7 @@ const HELP: [string, string][] = [
   ['Double-click middle button', 'Link window/level + zoom between tiles (same as I)'],
   ['R  T  A  D', 'Ruler, text, arrow, density value (HU)'],
   ['G  F  E  H  O', 'Angle, freehand ROI, elliptical ROI, circle ROI, magnifying glass'],
-  ['P', 'Spine labels: pick the first level, click it on the image, then click above / below for the next levels'],
+  ['P', 'Spine labels: pick the first level, click it on the image, then click above / below for the next levels (they show in every plane)'],
   ['W / Z / Shift+Z / Shift+X', 'Window/level / dynamic scroll (left-drag through the images) / zoom / pan'],
   ['X / Delete', 'Eraser / delete the selected measurement'],
   ['V / Shift+Delete', 'Save the annotations with the study / delete all annotations'],

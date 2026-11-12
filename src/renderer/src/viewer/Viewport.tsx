@@ -341,10 +341,17 @@ export function Viewport(p: Props) {
     element.addEventListener(Enums.Events.STACK_NEW_IMAGE, onNewImage)
     const prevent = (e: Event) => e.preventDefault()
     element.addEventListener('contextmenu', prevent)
-    // Spine labels placed in another tile change the level shown on this one.
+    // Spine labels placed, moved or deleted in another tile show here too (in every plane) and
+    // change the level shown on axial images.
     const onAnnotation = (e: Event) => {
       const a = (e as CustomEvent<{ annotation?: csTools.Types.Annotation }>).detail?.annotation
-      if (!a || a.metadata?.toolName === SpineLabelTool.toolName) refresh()
+      if (a && a.metadata?.toolName !== SpineLabelTool.toolName) return
+      refresh()
+      try {
+        csTools.utilities.triggerAnnotationRenderForViewportIds([id])
+      } catch {
+        /* not rendered yet */
+      }
     }
     const annotationEvents = [
       csTools.Enums.Events.ANNOTATION_ADDED,

@@ -116,10 +116,14 @@ a second monitor if you have one)
 - **Spine labels** (key **P**): pick the first level in the small panel (C1 … S5, Co, or the disc
   levels C2-C3 … L5-S1) and click that vertebra. Each further click above or below the labels names
   the next level in order (above L3 → L2, below → L4); a click between two labels fills a gap.
-  The labels show on every slice of the sagittal / coronal series (and on the other series of the
-  same scan in that plane), and **axial images show the level they are at** ("Level ≈ L4", or
-  "L4-L5" in the disc space). Drag a label to move it; Delete removes the selected one. Works on
-  X-rays too (then "above" is the top of the screen). Drag the panel by its title to move it.
+  The labels show in **every plane** of the scan, whichever plane they were placed on: on every
+  sagittal and coronal slice at their height (also in the other series of the same scan), and on
+  the axial images of their level, where the vertebra is; **axial images also show the level they
+  are at** ("Level ≈ L4", or "L4-L5" in the disc space). A sequence started on the sagittal images
+  continues on the coronal or axial ones. Drag a label to move it; Delete removes the selected one.
+  In the MPR view the crosshair can't be grabbed while labelling, so clicks on its lines place
+  labels. Works on X-rays too (then "above" is the top of the screen). Drag the panel by its title
+  to move it.
 - **Cardiothoracic ratio**: 4 points (both heart borders, then both inner chest walls; the widths
   are measured across the image) or 6 points (two on the midline first; CTR = (MRD + MLD) / chest
   width, measured square to the midline).

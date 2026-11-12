@@ -237,6 +237,10 @@ export function setPrimaryTool(primary: ToolName, mprMode: boolean): void {
   if (!isDragMode(primary) && g.hasTool(toolNameOf(primary))) {
     g.setToolActive(toolNameOf(primary), { bindings: [{ mouseButton: MouseBindings.Primary }] })
   }
+  // MPR view: while a measurement tool (spine labels, ruler …) is chosen, the crosshair is only
+  // drawn, so a click on one of its lines labels or measures there instead of moving it. With
+  // window/level, zoom or pan it can still be dragged.
+  if (mprMode && primary !== 'Crosshairs' && !isDragMode(primary)) g.setToolEnabled(toolNameOf('Crosshairs'))
   g.setToolActive(toolNameOf('StackScroll'), {
     bindings: [{ mouseButton: MouseBindings.Wheel }, { mouseButton: MouseBindings.Auxiliary }]
   })

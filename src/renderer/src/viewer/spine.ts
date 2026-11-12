@@ -1,7 +1,8 @@
 // Spine labels (P). Pick the first level in the panel and click it on the image; every further
 // click above or below the labels names the next vertebra (or disc) in order: above L3 -> L2,
-// below -> L4. Labels on sagittal / coronal images show on every slice of the series (and on the
-// other series of the same scan in that plane), and axial images show the level they are at.
+// below -> L4. On CT / MR a label is a point in the patient, so it shows in every plane of the
+// scan, whichever plane it was placed on: on every sagittal and coronal slice at its height, and
+// on the axial images of its level, which also show the level they are at ("Level ≈ L4").
 
 import { Enums as CoreEnums, getEnabledElement, metaData } from '@cornerstonejs/core'
 import type { Types } from '@cornerstonejs/core'
@@ -121,32 +122,47 @@ function headAxis(vp: Types.IViewport): Point3 {
   return up ? [up[0], up[1], up[2]] : [0, -1, 0]
 }
 
-/** Whether a label is drawn on what this viewport shows now. */
-function showsOn(vp: Types.IViewport, a: Annotation): boolean {
+/** A label placed on CT / MR (a point in the patient), shown in every plane of the scan. */
+const isPatientLabel = (a: Annotation) => a.isVisible !== false && !!dataOf(a).spine?.oriented
+
+/**
+ * Whether a label is drawn on what this viewport shows now. `levelHere` is spineLevelAt(vp) when
+ * the caller already knows it (it is the same for every label of the image).
+ */
+function showsOn(vp: Types.IViewport, a: Annotation, levelHere?: string | null): boolean {
   if (a.isVisible === false) return false
   const d = dataOf(a)
   const imageId = currentImageId(vp)
   if (!d.spine?.oriented || (isStack(vp) && !imageIsOriented(imageId))) {
     return isStack(vp) && !!imageId && a.metadata?.referencedImageId === imageId // X-rays: only its own image
   }
+  // CT / MR: whichever plane the label was placed on.
   const { viewPlaneNormal: n, focalPoint: f } = vp.getCamera()
-  const an = a.metadata?.viewPlaneNormal
-  if (!n || !f || !an || Math.abs(dot(an, n)) < 0.9) return false // another plane
-  // Sagittal / coronal: the spine runs through the image, so the label shows on every slice
-  // at its height. Axial-type images: only on the slice it was placed on.
+  if (!n || !f) return false
+  // Sagittal / coronal: the spine runs through the image, so every label shows on every slice
+  // at its height.
   if (Math.abs(n[2]) < 0.5) return true
+  // Axial-type images: a label placed on this image, and the label of the level the image is at
+  // (the "Level ≈ L4" of the overlay), drawn where the vertebra is.
   if (imageId && a.metadata?.referencedImageId === imageId) return true
   const p = d.handles.points[0]
-  return Math.abs(dot([p[0] - f[0], p[1] - f[1], p[2] - f[2]], n)) < 1
+  if (Math.abs(dot([p[0] - f[0], p[1] - f[1], p[2] - f[2]], n)) < 1) return true
+  const level = levelHere === undefined ? spineLevelAt(vp) : levelHere
+  return !!level && level === d.label
 }
 
-/** The labels the next click continues from (same kind, same plane, same scan). */
+/**
+ * The labels the next click continues from (same kind, same scan). On CT / MR that is every label
+ * of the scan, in any plane: a sequence started on the sagittal images goes on in the coronal or
+ * axial ones. On X-rays: the labels of the image.
+ */
 function sequenceOf(vp: Types.IViewport, mode: SpineMode): { label: string; index: number; s: number }[] {
   const levels = levelsOf(mode)
   const h = headAxis(vp)
+  const oriented = viewportIsOriented(vp)
   const all = (annState.getAnnotations(SpineLabelTool.toolName, vp.element) ?? []) as Annotation[]
   return all
-    .filter((a) => showsOn(vp, a) && modeOf(dataOf(a).label) === mode)
+    .filter((a) => (oriented ? isPatientLabel(a) : showsOn(vp, a)) && modeOf(dataOf(a).label) === mode)
     .map((a) => {
       const d = dataOf(a)
       return { label: d.label, index: levels.indexOf(d.label), s: dot(d.handles.points[0], h) }
@@ -214,18 +230,15 @@ export function clearSpineLabels(vp: Types.IViewport): number {
 }
 
 /**
- * The level an axial image is at, from the labels placed on sagittal / coronal images of the same
- * scan: "L4" (vertebral body), "L4-L5" (disc space) or null when it is not near a labelled level.
+ * The level an axial image is at, from the labels of the same scan (placed in any plane):
+ * "L4" (vertebral body), "L4-L5" (disc space) or null when it is not near a labelled level.
  */
 export function spineLevelAt(vp: Types.IViewport): string | null {
   try {
     if (!viewportIsOriented(vp)) return null
     const { viewPlaneNormal: n, focalPoint: f } = vp.getCamera()
     if (!n || !f || Math.abs(n[2]) < 0.7) return null // not an axial image
-    const labels = ((annState.getAnnotations(SpineLabelTool.toolName, vp.element) ?? []) as Annotation[]).filter((a) => {
-      const an = a.metadata?.viewPlaneNormal
-      return a.isVisible !== false && !!dataOf(a).spine?.oriented && !!an && Math.abs(an[2]) < 0.5
-    })
+    const labels = ((annState.getAnnotations(SpineLabelTool.toolName, vp.element) ?? []) as Annotation[]).filter(isPatientLabel)
     if (!labels.length) return null
     // Height of this image's plane where the spine is (it may be angled along a disc).
     const pts = labels.map((a) => dataOf(a).handles.points[0])
@@ -285,6 +298,10 @@ function levelAtHeight(labels: Annotation[], mode: SpineMode, z: number): string
 
 // ------------------------------------------------------------------ the Cornerstone tool
 
+/** Every tile showing the scan, in any plane (Cornerstone's default is tiles of the same plane only). */
+const tilesOfScan = (element: HTMLDivElement): string[] =>
+  viewportFilters.getViewportIdsWithToolToRender(element, SpineLabelTool.toolName, false)
+
 export class SpineLabelTool extends csTools.AnnotationTool {
   static toolName = 'SpineLabel'
   /** Text boxes as last drawn, per viewport, for hit testing. */
@@ -319,7 +336,7 @@ export class SpineLabelTool extends csTools.AnnotationTool {
       }
     })
     annState.addAnnotation(annotation, element)
-    const viewportIdsToRender = viewportFilters.getViewportIdsWithToolToRender(element, this.getToolName())
+    const viewportIdsToRender = tilesOfScan(element)
     this.editData = { annotation, newAnnotation: true, viewportIdsToRender }
     this.dragOffset = [0, 0, 0]
     this.startEditing(element)
@@ -329,20 +346,26 @@ export class SpineLabelTool extends csTools.AnnotationTool {
 
   /** The dot was grabbed: move it. */
   handleSelectedCallback(evt: InteractionEvent, annotation: Annotation): void {
-    this.select(evt, annotation, [0, 0, 0])
+    this.select(evt, annotation)
   }
 
   /** The text was grabbed: move the label, keeping where it was grabbed. */
   toolSelectedCallback(evt: InteractionEvent, annotation: Annotation): void {
-    const p = dataOf(annotation).handles.points[0]
-    const w = evt.detail.currentPoints.world
-    this.select(evt, annotation, [p[0] - w[0], p[1] - w[1], p[2] - w[2]])
+    this.select(evt, annotation)
   }
 
-  private select(evt: InteractionEvent, annotation: Annotation, offset: Point3): void {
+  /**
+   * The label moves with the mouse, by as much as the mouse moves in this image's plane. Its
+   * position across the plane stays (a label placed on a sagittal image and moved on a coronal
+   * one keeps its front-to-back position).
+   */
+  private select(evt: InteractionEvent, annotation: Annotation): void {
     const { element } = evt.detail
+    const p = dataOf(annotation).handles.points[0]
+    const w = evt.detail.currentPoints.world
+    const offset: Point3 = [p[0] - w[0], p[1] - w[1], p[2] - w[2]]
     annotation.highlighted = true
-    const viewportIdsToRender = viewportFilters.getViewportIdsWithToolToRender(element, this.getToolName())
+    const viewportIdsToRender = tilesOfScan(element)
     this.editData = { annotation, viewportIdsToRender }
     this.dragOffset = offset
     this.startEditing(element)
@@ -442,7 +465,9 @@ export class SpineLabelTool extends csTools.AnnotationTool {
     if (!annotations?.length) return []
     const enabled = getEnabledElement(element)
     if (!enabled) return []
-    return annotations.filter((a) => showsOn(enabled.viewport as unknown as Types.IViewport, a))
+    const viewport = enabled.viewport as unknown as Types.IViewport
+    const level = spineLevelAt(viewport) // the same for every label of this image
+    return annotations.filter((a) => showsOn(viewport, a, level))
   }
 
   renderAnnotation(enabledElement: Types.IEnabledElement, svgDrawingHelper: csTools.Types.SVGDrawingHelper): boolean {
