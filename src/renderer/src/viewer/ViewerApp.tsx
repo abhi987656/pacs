@@ -185,6 +185,8 @@ interface MprState {
   studyId: number
   prevLayout: { rows: number; cols: number }
   prevSlots: SlotInfo[]
+  /** The tile (of prevSlots) the MPR was started from. */
+  fromIndex: number
   /** The planes are computed on the processor (series too big for the graphics card). */
   cpu: boolean
 }
@@ -377,15 +379,15 @@ export function ViewerApp() {
     [seriesMap]
   )
 
+  /** Back to the tiles from before the MPR (callers may change them further right after). */
   const exitMpr = useCallback(() => {
-    setMpr((m) => {
-      if (m) {
-        setLayout(m.prevLayout)
-        setSlots(m.prevSlots)
-        setActive(0)
-      }
-      return null
-    })
+    const m = mprRef.current
+    if (m) {
+      setLayout(m.prevLayout)
+      setSlots(m.prevSlots)
+      setActive(m.fromIndex)
+    }
+    setMpr(null)
     setSlab(0)
     setMprLoading(null)
     setCross(null)
@@ -541,41 +543,20 @@ export function ViewerApp() {
 
   // ------------------------------------------------------------ slots / layout
   /**
-   * Opens a series in a tile (thumbnail click or drop, Alt+S / Alt+A). A tile showing a coronal or
-   * sagittal view keeps that view for the new series (on the graphics card or the processor, as
-   * that series needs); a series that can't be reformatted shows its own images. On the MPR view,
-   * the MPR switches to the new series.
+   * Opens a series in a tile (thumbnail click or drop, Alt+S / Alt+A): always as its own (axial)
+   * images, also in a tile that showed a coronal / sagittal view (3, ? and M show other planes).
+   * On the MPR view: leaves the MPR and opens the series in the tile the MPR was started from.
    */
   const loadIntoSlot = useCallback(
     async (index: number, seriesId: number, studyId: number) => {
-      const target = slotsRef.current[index]
+      await ensureImages(seriesId)
       const m = mprRef.current
-      const imgs = await ensureImages(seriesId)
-      if (m && target?.id.startsWith('mpr-')) {
-        if (seriesId === m.seriesId) return
-        if (!imgs.reconstructable) {
-          ui.toast('This series cannot be reconstructed (needs at least 3 parallel slices of the same size).', 'error')
-          return
-        }
-        const cpu = reformatOnCpu(imgs)
-        setCross(null)
-        setCrossPlanes({})
-        setMpr({ ...m, seriesId, studyId, cpu }) // leaving the MPR still returns to the tiles from before it
-        setSlots(MPR_PLANES.map((k) => ({ id: `mpr-${k}`, kind: k, seriesId, studyId, cpu })))
-        setActive(index)
-        return
-      }
+      const at = m ? m.fromIndex : index
       if (m) exitMpr()
-      const plane = target && target.kind !== 'stack' ? target.kind : null
-      const keepPlane = !!plane && imgs.reconstructable
-      if (plane && !keepPlane) {
-        ui.toast('This series cannot be shown in other planes (it needs at least 3 parallel slices of the same size): showing its own images.', 'info')
-      }
-      const view: Pick<SlotInfo, 'kind' | 'cpu'> = keepPlane && plane ? { kind: plane, cpu: reformatOnCpu(imgs) } : { kind: 'stack', cpu: false }
-      setSlots((prev) => prev.map((s, i) => (i === index ? { ...s, ...view, voi: null, seriesId, studyId } : s)))
-      setActive(index)
+      setSlots((prev) => prev.map((s, i) => (i === at ? { ...s, kind: 'stack', cpu: false, voi: null, seriesId, studyId } : s)))
+      setActive(at)
     },
-    [ensureImages, exitMpr, ui]
+    [ensureImages, exitMpr]
   )
 
   const applyLayout = async (rows: number, cols: number) => {
@@ -728,7 +709,7 @@ export function ViewerApp() {
     }
     // Series bigger than this graphics card holds in one piece: computed on the processor instead.
     const cpu = reformatOnCpu(imgs)
-    setMpr({ seriesId: slot.seriesId, studyId: slot.studyId, prevLayout: layout, prevSlots: slots, cpu })
+    setMpr({ seriesId: slot.seriesId, studyId: slot.studyId, prevLayout: layout, prevSlots: slots, fromIndex: active, cpu })
     setLayout({ rows: 1, cols: 3 })
     setMaximized(null)
     setSlots(MPR_PLANES.map((k) => ({ id: `mpr-${k}`, kind: k, seriesId: slot.seriesId, studyId: slot.studyId, cpu })))

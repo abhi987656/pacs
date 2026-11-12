@@ -135,10 +135,11 @@ a second monitor if you have one)
 - **Compare with prior** (key **C**): current and previous study side by side, with linked scrolling.
 - **Coronal / sagittal in the same tile**: **3** shows the coronal view (3 again = back to the original
   axial images), **?** shows the sagittal view (? again = coronal). Window/level is kept. A series
-  opened in a coronal / sagittal tile (thumbnail clicked or dragged onto it, Alt+S / Alt+A) is shown
-  in that plane too; a series that can't be reformatted (e.g. a scout) shows its own images.
-- **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs. Click or drag
-  another series onto the MPR view to see that series in MPR (M leaves it, back to the tiles from before).
+  opened in a tile – thumbnail clicked, or dragged onto any tile including a coronal / sagittal one,
+  Alt+S / Alt+A – always shows its own (axial) images; press 3 / ? for its other planes.
+- **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP slabs. Opening another
+  series while the MPR view is shown leaves the MPR and shows that series' axial images in the tile
+  the MPR was started from.
 - **No dedicated graphics card needed**: MPR / coronal / sagittal also run on built-in graphics
   (Intel UHD / Iris, AMD). Windows lets built-in graphics hold only about 128 MB in one piece, so a
   bigger series (for example a 0.625 mm CT with 500+ images) is reformatted **on the processor**
