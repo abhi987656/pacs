@@ -62,6 +62,7 @@ import {
   isDragMode,
   lowerVolumeBudget,
   onAnnotationCompleted,
+  ORIGINAL_PRESET_KEY,
   reformatOnCpu,
   releaseVolumes,
   setPresentationLink,
@@ -83,12 +84,13 @@ import {
   cpuPlaneStack,
   cpuVolumeCenter,
   ensureCpuVolume,
+  nextSlab,
   PROJECTION_MM,
   projectionLabel,
   reformatSeriesOf,
   releaseCpuVolumes
 } from './reformat'
-import type { Plane, Projection, Vec3 } from './reformat'
+import type { Plane, Projection, ProjectionMode, Vec3 } from './reformat'
 import { clearSpineLabels, setSpineNotifier } from './spine'
 import { SpinePanel } from './SpinePanel'
 import { Viewport } from './Viewport'
@@ -226,8 +228,10 @@ const TOOL_TIPS: Partial<Record<ToolName, string>> = {
 const HELP: [string, string][] = [
   ['Mouse wheel / middle-drag', 'Scroll through images'],
   ['Left-drag', 'Window/level (or the selected tool)'],
+  ['Hold right + drag', 'Zoom: drag up = in, down = out (around the point pressed)'],
   ['Hold left + right click', 'Switch the drag between window/level → zoom → pan'],
   ['Right click', 'Image tools menu (presets, tools, layouts …)'],
+  ['Ctrl + Shift + wheel', 'MIP slab: wheel up = thicker, down = thinner (2 – 100 mm, then thin); a MinIP slab stays MinIP'],
   ['Alt + drag', 'Window/level (left-right = width, up-down = level)'],
   ['Alt + Ctrl + drag / Alt + Shift + drag', 'Zoom / pan'],
   ['Shift + drag / Ctrl + drag', 'Move / copy a tile (series, axial / coronal / sagittal view) to another tile'],
@@ -245,9 +249,9 @@ const HELP: [string, string][] = [
   ['Q / U', 'Lock / unlock reference lines'],
   ['= / -', 'Zoom to fit / zoom 1:1'],
   ['N / M', 'Cine / MPR (axial, sagittal, coronal)'],
-  ['Number pad 1 – 9, 0', 'Window presets, 0 = original (Num Lock on or off)'],
+  ['Number pad 0 – 9', `Window presets: 0 = bone, 3 = liver, 1 = soft tissue, 2 = lung, 5 – 9 head / CTA, ${ORIGINAL_PRESET_KEY} = original (Num Lock on or off)`],
   ['3 / ?', 'Coronal / sagittal view of the tile; press again to go back (3 = axial, ? = coronal)'],
-  ['Slab menu (toolbar) / right-click › MIP / MinIP', 'Thick slab: MIP (brightest) or MinIP (darkest), 5–50 mm, on the active tile or the MPR view'],
+  ['Slab menu (toolbar) / right-click › MIP / MinIP', 'Thick slab: MIP (brightest) or MinIP (darkest) on the active tile or the MPR view'],
   ['Home / End, PgUp / PgDn, arrows', 'First / last image, ±10 images, ±1 image'],
   ['F5', 'Reset the image'],
   ['Shift+T / Shift+A / Shift+I', 'Text overlay / annotations / invert'],
@@ -316,6 +320,8 @@ export function ViewerApp() {
   toolRef.current = { tool, locked }
   const activeRef = useRef(active)
   activeRef.current = active
+  /** When Ctrl+Shift+wheel last said that a series can't have a MIP slab. */
+  const slabNoticeAt = useRef(-Infinity)
   const mprRef = useRef(mpr)
   mprRef.current = mpr
   const expected = useRef(new Map<string, number>())
@@ -803,15 +809,15 @@ export function ViewerApp() {
   }, [mprProj, mpr, mprLoading])
 
   /**
-   * Thin / MIP / MinIP: for the three tiles of the MPR view, or for the active tile. Original axial
-   * images become a thick-slab axial reformat at the same level (Thin returns to the images there).
+   * Thin / MIP / MinIP: for the three tiles of the MPR view, or for the active tile (or tile `idx`).
+   * Original axial images become a thick-slab axial reformat at the same level (Thin returns to the
+   * images there).
    */
-  const setProjection = async (proj: Projection | null) => {
+  const setProjection = async (proj: Projection | null, idx = active) => {
     if (mpr) {
       setMprProj(proj)
       return
     }
-    const idx = active
     const slot = slotsRef.current[idx]
     if (!slot?.seriesId || slot.studyId == null) {
       ui.toast('Select a tile with a series first.', 'info')
@@ -839,8 +845,46 @@ export function ViewerApp() {
     setSlots((prev) => prev.map((s, i) => (i === idx ? { ...s, slab: proj } : s)))
   }
 
+  /**
+   * Ctrl+Shift+wheel over tile `idx`: one step thicker (1) or thinner (-1). Thin becomes MIP; the
+   * MPR view changes all three planes. Uses the latest state, so fast wheel turns all count.
+   */
+  const stepSlab = (idx: number, dir: 1 | -1) => {
+    const slot = slotsRef.current[idx]
+    if (!slot) return
+    setActive(idx)
+    if (mprRef.current && slot.id.startsWith('mpr-')) {
+      setMprProj((p) => nextSlab(p, dir))
+      return
+    }
+    if (slot.seriesId == null) return
+    const next = nextSlab(slot.slab, dir)
+    // Original images <-> thick-slab axial reformat: rebuilt at the same level.
+    if (slot.kind === 'stack') {
+      if (!next) return
+      if (imagesRef.current[slot.seriesId]?.reconstructable === false) {
+        // e.g. an X-ray: one notice per turn of the wheel, not one per step
+        if (performance.now() - slabNoticeAt.current > 3000) ui.toast('MIP / MinIP needs a series of at least 3 parallel slices of the same size.', 'info')
+        slabNoticeAt.current = performance.now()
+        return
+      }
+      void setProjection(next, idx)
+      return
+    }
+    if (slot.kind === 'axial' && !next) {
+      void setProjection(null, idx)
+      return
+    }
+    setSlots((prev) => prev.map((s, i) => (i === idx && s.kind !== 'stack' ? { ...s, slab: nextSlab(s.slab, dir) } : s)))
+  }
+
   /** The active tile's (or the MPR view's) thick slab, for the menus. */
   const currentProj = (): Projection | null => (mpr ? mprProj : slots[active]?.slab ?? null)
+  /** The slab menus' thicknesses, plus the current one when the wheel chose another. */
+  const slabChoices = (mode: ProjectionMode): number[] => {
+    const cur = currentProj()
+    return cur?.mode === mode && !PROJECTION_MM.includes(cur.mm) ? [...PROJECTION_MM, cur.mm].sort((a, b) => a - b) : PROJECTION_MM
+  }
   const projValue = (p: Projection | null) => (p && p.mm > 0 ? `${p.mode}:${p.mm}` : '')
   const parseProj = (v: string): Projection | null => {
     const [mode, mm] = v.split(':')
@@ -1361,7 +1405,7 @@ export function ViewerApp() {
       const numpad = /^Numpad(\d)$/.exec(e.code)
       if (numpad && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault()
-        if (numpad[1] === '0') resetVoi()
+        if (numpad[1] === ORIGINAL_PRESET_KEY) resetVoi()
         else {
           const p = CT_PRESETS.find((x) => x.key === numpad[1])
           if (p) applyPreset(p.ww, p.wc)
@@ -1483,7 +1527,7 @@ export function ViewerApp() {
   )
 
   const presetItems: MenuItem[] = [
-    { label: 'Original (from scanner)', hint: 'Num 0', onClick: resetVoi },
+    { label: 'Original (from scanner)', hint: `Num ${ORIGINAL_PRESET_KEY}`, onClick: resetVoi },
     ...CT_PRESETS.map((p) => ({ label: `${p.name}  (${p.ww}/${p.wc})`, hint: p.key ? `Num ${p.key}` : '', onClick: () => applyPreset(p.ww, p.wc) }))
   ]
   const pick = (label: string, t: ToolName, hint?: string): MenuItem => ({
@@ -1608,7 +1652,7 @@ export function ViewerApp() {
         'sep',
         ...(['mip', 'minip'] as const).flatMap((mode, k) => [
           ...(k ? (['sep'] as const) : []),
-          ...PROJECTION_MM.map((mm) => ({
+          ...slabChoices(mode).map((mm) => ({
             label: projectionLabel({ mode, mm }),
             checked: currentProj()?.mode === mode && currentProj()?.mm === mm,
             onClick: () => void setProjection({ mode, mm })
@@ -1728,7 +1772,7 @@ export function ViewerApp() {
         ))}
         <span className="v-sep" />
         {toolBtn('WindowLevel', 'Window level (left-drag; Alt+drag)', <SunMoon size={17} />)}
-        {toolBtn('Zoom', 'Zoom (Shift+Z; Alt+Ctrl+drag; hold left + right-click to switch)', <ZoomIn size={17} />)}
+        {toolBtn('Zoom', 'Zoom (Shift+Z; hold right + drag; Alt+Ctrl+drag; hold left + right-click to switch)', <ZoomIn size={17} />)}
         {toolBtn('Pan', 'Pan (Shift+X; Alt+Shift+drag)', <Hand size={17} />)}
         {toolBtn('StackScroll', 'Dynamic scroll – left-drag up/down through the images (Z)', <ChevronsUpDown size={17} />)}
         {toolBtn('Magnify', 'Magnifying glass (O)', <Search size={17} />)}
@@ -1750,7 +1794,7 @@ export function ViewerApp() {
         <span className="v-sep" />
         <select
           className="v-select"
-          title="Image presets (number pad 1–9, 0 = original)"
+          title={`Image presets (number pad: 0 = bone, 3 = liver, ${ORIGINAL_PRESET_KEY} = original; the others as listed)`}
           value=""
           onChange={(e) => {
             const v = e.target.value
@@ -1762,7 +1806,7 @@ export function ViewerApp() {
           }}
         >
           <option value="">Image presets…</option>
-          <option value="default">0 · Original (from scanner)</option>
+          <option value="default">{ORIGINAL_PRESET_KEY} · Original (from scanner)</option>
           {CT_PRESETS.map((p, i) => (
             <option key={p.name} value={i}>
               {p.key ? `${p.key} · ` : ''}
@@ -1783,20 +1827,20 @@ export function ViewerApp() {
         {mpr && toolBtn('Crosshairs', 'Crosshairs', <Crosshair size={17} />)}
         <select
           className="v-select"
-          title={`Thick slab: MIP (brightest) or MinIP (darkest) through the slab – ${mpr ? 'all three MPR planes' : 'the active tile'}`}
+          title={`Thick slab: MIP (brightest) or MinIP (darkest) through the slab – ${mpr ? 'all three MPR planes' : 'the active tile'}. Ctrl+Shift+wheel over a tile: thicker / thinner`}
           value={projValue(currentProj())}
           onChange={(e) => void setProjection(parseProj(e.target.value))}
         >
           <option value="">Thin</option>
           <optgroup label="MIP">
-            {PROJECTION_MM.map((t) => (
+            {slabChoices('mip').map((t) => (
               <option key={`mip${t}`} value={`mip:${t}`}>
                 MIP {t} mm
               </option>
             ))}
           </optgroup>
           <optgroup label="MinIP">
-            {PROJECTION_MM.map((t) => (
+            {slabChoices('minip').map((t) => (
               <option key={`minip${t}`} value={`minip:${t}`}>
                 MinIP {t} mm
               </option>
@@ -1895,6 +1939,7 @@ export function ViewerApp() {
                   setActive(i)
                   setMenu({ x, y })
                 }}
+                onSlabStep={(dir) => stepSlab(i, dir)}
                 onSeriesDrag={onSeriesDrag}
                 onMiddleDoubleClick={togglePresLink}
                 onActivate={() => setActive(i)}

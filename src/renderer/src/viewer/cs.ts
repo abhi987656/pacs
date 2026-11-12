@@ -326,12 +326,12 @@ export interface WlPreset {
   wc: number
 }
 
-// Same values as the Fujifilm Synapse defaults; keys 1-9 / number pad.
+// Same values as the Fujifilm Synapse defaults; `key` = number pad key (0 = bone, 3 = liver).
 export const CT_PRESETS: WlPreset[] = [
   { key: '1', name: 'Body Soft Tissue', ww: 350, wc: 50 },
   { key: '2', name: 'Body Lung', ww: 1600, wc: -500 },
-  { key: '3', name: 'Body Bone', ww: 1500, wc: 300 },
-  { key: '4', name: 'Body Liver', ww: 200, wc: 60 },
+  { key: '3', name: 'Body Liver', ww: 200, wc: 60 },
+  { key: '0', name: 'Body Bone', ww: 1500, wc: 300 },
   { key: '5', name: 'Head Mid Brain', ww: 80, wc: 40 },
   { key: '6', name: 'Head Post Fossa', ww: 200, wc: 40 },
   { key: '7', name: 'Head Blood', ww: 700, wc: 80 },
@@ -341,6 +341,8 @@ export const CT_PRESETS: WlPreset[] = [
   { key: '', name: 'Stroke', ww: 40, wc: 40 },
   { key: '', name: 'Subdural', ww: 200, wc: 75 }
 ]
+/** Number pad key for the image's own window (from the scanner). */
+export const ORIGINAL_PRESET_KEY = '4'
 
 // Uses the DICOM window convention (same as the scanner/other PACS), so W 400 C 40 shows as 400/40.
 export function applyVoi(vp: Types.IViewport, ww: number, wc: number): void {
@@ -412,9 +414,17 @@ export function panBy(vp: Types.IViewport, from: [number, number], to: [number, 
   vp.render()
 }
 
-export function zoomBy(vp: Types.IViewport, factor: number): void {
+/** Zoom in (factor > 1) or out; with `at` (canvas pixels) the image point there stays under it. */
+export function zoomBy(vp: Types.IViewport, factor: number, at?: [number, number]): void {
   const z = vp.getZoom()
-  vp.setZoom(Math.min(40, Math.max(0.05, z * factor)))
+  const next = Math.min(40, Math.max(0.05, z * factor))
+  if (next === z) return
+  const fixed = at ? vp.canvasToWorld(at) : null
+  vp.setZoom(next)
+  if (fixed && at) {
+    const now = vp.worldToCanvas(fixed)
+    panBy(vp, [now[0], now[1]], at)
+  }
   vp.render()
 }
 

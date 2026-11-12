@@ -107,10 +107,11 @@ a second monitor if you have one)
 - Layouts 1×1 to 2×3. Double-click a viewport to maximise it (while window/level, zoom, pan or
   dynamic scroll is the mouse tool).
 - Right-click opens an image tools menu with presets, tools, scale/rotate/flip, reference lines, tile
-  formats, linking, cine, MPR, save and copy.
-- Window/level presets on the **number pad** 1–9 (0 = original), with Num Lock on or off:
-  1 Body Soft Tissue, 2 Body Lung, 3 Body Bone, 4 Body Liver, 5 Head Mid Brain, 6 Head Post Fossa,
-  7 Head Blood, 8 Head Bone, 9 CTA MIP. The menu also has Head IAC, Stroke and Subdural.
+  formats, linking, cine, MPR, save and copy. **Holding the right button and dragging zooms** (up =
+  in, down = out) around the point you pressed.
+- Window/level presets on the **number pad**, with Num Lock on or off: **0 Body Bone**, 1 Body Soft
+  Tissue, 2 Body Lung, **3 Body Liver**, 4 original (from the scanner), 5 Head Mid Brain, 6 Head Post
+  Fossa, 7 Head Blood, 8 Head Bone, 9 CTA MIP. The menu also has Head IAC, Stroke and Subdural.
 - Measurements: length, angle, Cobb angle, ellipse / circle / rectangle / polygon / freehand ROI (mean/SD
   HU, area), probe (HU), bidirectional, text and arrow (right-click › **Annotations**).
 - **Spine labels** (key **P**): pick the first level in the small panel (C1 … S5, Co, or the disc
@@ -140,12 +141,14 @@ a second monitor if you have one)
 - **MPR** (key **M**): axial, sagittal and coronal with crosshairs, plus MIP / MinIP slabs. Opening
   another series while the MPR view is shown leaves the MPR and shows that series' axial images in
   the tile the MPR was started from.
-- **MIP / MinIP** (slab menu in the toolbar, or right-click › MIP / MinIP): a 5–50 mm thick slab
-  showing the brightest values through it (MIP: vessels, nodules) or the darkest (MinIP: airways,
-  emphysema). It applies to the active tile – coronal / sagittal views, or axial images, which then
-  show as a thick-slab axial view at the same level (**Thin** goes back to the original images
-  there) – or, in the MPR view, to all three planes. The tile label says which ("CORONAL · MinIP
-  10 mm"); the slab stays with the tile when you switch it between planes (3 / ?).
+- **MIP / MinIP** (slab menu in the toolbar, or right-click › MIP / MinIP): a thick slab showing the
+  brightest values through it (MIP: vessels, nodules) or the darkest (MinIP: airways, emphysema).
+  **Ctrl+Shift+wheel** over a tile makes the slab thicker (wheel up: Thin → MIP 2, 3, … 10, 12, …
+  100 mm) or thinner (wheel down, back to Thin); a MinIP slab stays MinIP. It applies to that tile –
+  coronal / sagittal views, or axial images, which then show as a thick-slab axial view at the same
+  level (**Thin** goes back to the original images there) – or, in the MPR view, to all three
+  planes. The tile label says which ("CORONAL · MinIP 10 mm"); the slab stays with the tile when you
+  switch it between planes (3 / ?).
 - **No dedicated graphics card needed**: MPR / coronal / sagittal also run on built-in graphics
   (Intel UHD / Iris, AMD). Windows lets built-in graphics hold only about 128 MB in one piece, so a
   bigger series (for example a 0.625 mm CT with 500+ images) is reformatted **on the processor**
@@ -244,9 +247,11 @@ How it connects, and what is protected:
 | Mouse / key | Action |
 | --- | --- |
 | Left-drag | Window/level (left-right = width, up-down = level), or the chosen tool |
+| Hold right + drag | Zoom: up = in, down = out (around the point pressed) |
 | Hold left + click right | Switch the drag between window/level → zoom → pan |
 | Right click | Image tools menu |
 | Wheel / middle-drag | Scroll through images |
+| Ctrl+Shift+wheel | MIP slab thicker (wheel up) / thinner (down, to Thin); MinIP stays MinIP |
 | Scroll bar on the left of the tile | Drag or click to move through the images (H/F, A/P, R/L ends) |
 | Double-click the mouse wheel | Link window/level + zoom between tiles |
 | Alt+drag / Alt+Ctrl+drag / Alt+Shift+drag | Window/level / zoom / pan |
@@ -265,7 +270,7 @@ How it connects, and what is protected:
 | Q / U | Lock / unlock reference lines |
 | = / - | Zoom to fit / zoom 1:1 |
 | N / M | Cine / MPR |
-| Number pad 1–9, 0 | Window presets, 0 = original (Num Lock on or off) |
+| Number pad 0–9 | Window presets: 0 = bone, 3 = liver, 4 = original (Num Lock on or off) |
 | 3 / ? | Coronal / sagittal of the active tile; again = back (3 → axial, ? → coronal) |
 | Home / End, PgUp / PgDn, arrows | First / last image, ±10, ±1 |
 | F5 | Reset the image |

@@ -28,6 +28,20 @@ export interface Projection {
 /** Slab thicknesses offered for MIP / MinIP. */
 export const PROJECTION_MM = [5, 10, 15, 20, 30, 50]
 export const projectionLabel = (p: Projection): string => `${p.mode === 'minip' ? 'MinIP' : 'MIP'} ${p.mm} mm`
+/** Slab thicknesses (mm) that Ctrl+Shift+wheel steps through. */
+export const SLAB_STEPS_MM = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100]
+
+/**
+ * One wheel step thicker (dir 1) or thinner (-1): Thin -> MIP 2 mm, … 100 mm; below 2 mm = Thin.
+ * A MinIP slab stays MinIP.
+ */
+export function nextSlab(p: Projection | null | undefined, dir: 1 | -1): Projection | null {
+  const mode: ProjectionMode = p?.mode ?? 'mip'
+  const mm = p && p.mm > 0 ? p.mm : 0
+  if (dir > 0) return { mode, mm: SLAB_STEPS_MM.find((t) => t > mm) ?? SLAB_STEPS_MM[SLAB_STEPS_MM.length - 1] }
+  const thinner = SLAB_STEPS_MM.filter((t) => t < mm)
+  return thinner.length ? { mode, mm: thinner[thinner.length - 1] } : null
+}
 type Scalars = Int16Array | Uint16Array | Uint8Array | Float32Array
 type ScalarsCtor = Int16ArrayConstructor | Uint16ArrayConstructor | Uint8ArrayConstructor | Float32ArrayConstructor
 

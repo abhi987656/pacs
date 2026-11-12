@@ -104,7 +104,27 @@ interface Props {
   /** The crosshair tool is active on this tile: left click / drag moves the crosshair. */
   crosshair?: boolean
   onCross?: (world: Vec3) => void
+  /** Ctrl+Shift+wheel over the tile: a thicker (1) or thinner (-1) MIP / MinIP slab. */
+  onSlabStep?: (dir: 1 | -1) => void
 }
+
+/**
+ * The right button: a click opens the image tools menu, holding it and dragging zooms. Kept for
+ * all tiles, because the button can be released (and Windows then sends the contextmenu event)
+ * over another tile.
+ */
+const rightButton = { down: false, moved: false, menu: false, upAt: 0 }
+// The contextmenu event that follows a right-drag zoom opens no menu (Windows sends it on release).
+window.addEventListener(
+  'contextmenu',
+  (e) => {
+    if (rightButton.moved && (rightButton.down || performance.now() - rightButton.upAt < 1000)) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+  },
+  true
+)
 
 /** Index of the image whose position along the slice normal is nearest to `target` (0 if none is known). */
 function nearestPosition(positions: (number | null)[], target: number): number {
@@ -148,7 +168,9 @@ export function Viewport(p: Props) {
   onImageChange.current = p.onImageChange
   const propsRef = useRef(p)
   propsRef.current = p
-  const drag = useRef<{ mode: DragMode; x: number; y: number; moved: boolean } | null>(null)
+  const slotRef = useRef<HTMLDivElement>(null)
+  /** Left drag in progress; `at` = where a zoom started (canvas pixels), the point that stays put. */
+  const drag = useRef<{ mode: DragMode; x: number; y: number; moved: boolean; at: [number, number] | null } | null>(null)
   const suppressMenu = useRef(false)
   const lastMiddle = useRef(0)
   const { id, kind } = p.slot
@@ -163,7 +185,8 @@ export function Viewport(p: Props) {
   // ---------------------------------------------------------------- Synapse-style mouse
   // Left drag = window/level (or zoom/pan); while holding the left button, each right click
   // switches W/L -> Zoom -> Pan. Alt+drag = W/L, Alt+Ctrl = zoom, Alt+Shift = pan.
-  // Shift+drag moves the series to another tile, Ctrl+drag copies it. Right click = menu.
+  // Shift+drag moves the series to another tile, Ctrl+drag copies it. Right click = menu;
+  // holding the right button and dragging zooms.
   const startManipulation = (mode: DragMode, cx: number, cy: number) => {
     const vp = getEngine().getViewport(id)
     const el = elRef.current
@@ -173,7 +196,7 @@ export function Viewport(p: Props) {
     let ww = voi?.ww ?? 400
     let wc = voi?.wc ?? 40
     const mult = voiMultiplier(vp)
-    drag.current = { mode, x: cx, y: cy, moved: false }
+    drag.current = { mode, x: cx, y: cy, moved: false, at: null }
     const move = (ev: MouseEvent) => {
       const d = drag.current
       if (!d) return
@@ -191,7 +214,8 @@ export function Viewport(p: Props) {
         wc = wc + dy * mult
         applyVoi(vp, ww, wc)
       } else if (d.mode === 'Zoom') {
-        zoomBy(vp, Math.exp(-dy * 0.01))
+        d.at ??= [d.x - rect.left, d.y - rect.top]
+        zoomBy(vp, Math.exp(-dy * 0.01), d.at)
       } else {
         panBy(vp, [d.x - rect.left, d.y - rect.top], [ev.clientX - rect.left, ev.clientY - rect.top])
       }
@@ -203,6 +227,42 @@ export function Viewport(p: Props) {
       drag.current = null
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up, true)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up, true)
+  }
+
+  /**
+   * Right button held: drag up = zoom in, down = zoom out, around the point pressed. Released
+   * without dragging, it is a right click: the image tools menu.
+   */
+  const startRightDrag = (cx: number, cy: number) => {
+    const el = elRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const at: [number, number] = [cx - r.left, cy - r.top]
+    Object.assign(rightButton, { down: true, moved: false, menu: false })
+    let lastY = cy
+    const end = () => {
+      rightButton.down = false
+      rightButton.upAt = performance.now()
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up, true)
+    }
+    const move = (ev: MouseEvent) => {
+      if (!(ev.buttons & 2)) return end() // released outside the window
+      if (!rightButton.moved && Math.abs(ev.clientX - cx) + Math.abs(ev.clientY - cy) < 4) return
+      rightButton.moved = true
+      const vp = getEngine().getViewport(id)
+      if (vp && ev.clientY !== lastY) zoomBy(vp, Math.exp(-(ev.clientY - lastY) * 0.01), at)
+      lastY = ev.clientY
+    }
+    const up = (ev: MouseEvent) => {
+      if (ev.button !== 2) return
+      end()
+      // Linux sends contextmenu while the button is down (noted in rightButton.menu); Windows sends
+      // it after this release, and the tile's handler opens the menu then.
+      if (rightButton.menu && !rightButton.moved) propsRef.current.onContextMenu(ev.clientX, ev.clientY)
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up, true)
@@ -256,12 +316,14 @@ export function Viewport(p: Props) {
       return // middle drag = scroll (handled by Cornerstone)
     }
     if (e.button === 2) {
+      e.preventDefault()
+      e.stopPropagation()
       if (drag.current) {
+        // Holding the left button: switch W/L -> zoom -> pan.
         drag.current.mode = p.onCycleDragMode()
+        drag.current.at = null
         suppressMenu.current = true
-        e.preventDefault()
-        e.stopPropagation()
-      }
+      } else startRightDrag(e.clientX, e.clientY)
       return
     }
     if (e.button !== 0) return
@@ -289,6 +351,32 @@ export function Viewport(p: Props) {
     e.stopPropagation()
     startManipulation(mode, e.clientX, e.clientY)
   }
+
+  // Ctrl+Shift+wheel: a thicker / thinner MIP slab instead of the next image. Caught before
+  // Cornerstone sees the wheel, and not passive, so the window does not zoom either.
+  useEffect(() => {
+    const root = slotRef.current
+    if (!root) return
+    let sum = 0
+    let last = 0
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return
+      e.preventDefault()
+      e.stopPropagation()
+      // With Shift held, Windows turns the wheel sideways: the turn arrives as deltaX.
+      const d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX
+      const px = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? d * 40 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? d * 400 : d
+      if (e.timeStamp - last > 500) sum = 0
+      last = e.timeStamp
+      sum += px
+      if (Math.abs(sum) < 40) return // a touchpad sends many small steps
+      const dir = sum < 0 ? 1 : -1 // wheel turned away from you = thicker
+      sum = 0
+      propsRef.current.onSlabStep?.(dir)
+    }
+    root.addEventListener('wheel', onWheel, { capture: true, passive: false })
+    return () => root.removeEventListener('wheel', onWheel, { capture: true })
+  }, [])
 
   // Enable / disable the Cornerstone element for this slot.
   useEffect(() => {
@@ -606,10 +694,17 @@ export function Viewport(p: Props) {
       className={`v-slot ${p.active ? 'active' : ''} ${dropping ? 'drop' : ''} ${p.hidden ? 'hidden' : ''} ${p.showAnnotations ? '' : 'hide-annotations'}`}
       data-slot-index={p.index}
       onMouseDownCapture={onMouseDownCapture}
+      ref={slotRef}
       onContextMenu={(e) => {
         e.preventDefault()
         if (suppressMenu.current) {
           suppressMenu.current = false
+          return
+        }
+        // Button still down (Linux sends the event on press): the menu opens on release, unless
+        // the mouse was dragged to zoom.
+        if (rightButton.down) {
+          rightButton.menu = true
           return
         }
         p.onContextMenu(e.clientX, e.clientY)
