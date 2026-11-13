@@ -29,6 +29,8 @@ import type { DragMode, SliceAxis } from './cs'
 import { cpuPlaneIndexAt, cpuPlaneStack, ensureCpuVolume, hasCpuVolume, projectionLabel, REFORMAT_SCHEME } from './reformat'
 import type { Projection, Vec3 } from './reformat'
 import { SpineLabelTool, spineLevelAt } from './spine'
+import { liverStore } from './liver/store'
+import { drawLiverOverlay, type OverlayExtras } from './liver/overlay'
 
 export type SlotKind = 'stack' | 'axial' | 'sagittal' | 'coronal'
 
@@ -106,6 +108,8 @@ interface Props {
   onCross?: (world: Vec3) => void
   /** Ctrl+Shift+wheel over the tile: a thicker (1) or thinner (-1) MIP / MinIP slab. */
   onSlabStep?: (dir: 1 | -1) => void
+  /** A tile of the liver analysis: shows its masks and takes its mouse tools. */
+  liver?: boolean
 }
 
 /**
@@ -169,6 +173,9 @@ export function Viewport(p: Props) {
   const propsRef = useRef(p)
   propsRef.current = p
   const slotRef = useRef<HTMLDivElement>(null)
+  const liverRef = useRef<HTMLCanvasElement>(null)
+  /** Brush cursor, finding radius or cut line being drawn on this tile (liver analysis). */
+  const liverExtras = useRef<OverlayExtras>({})
   /** Left drag in progress; `at` = where a zoom started (canvas pixels), the point that stays put. */
   const drag = useRef<{ mode: DragMode; x: number; y: number; moved: boolean; at: [number, number] | null } | null>(null)
   const suppressMenu = useRef(false)
@@ -230,6 +237,95 @@ export function Viewport(p: Props) {
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up, true)
+  }
+
+  /** Liver analysis tools (left button): click, brush, finding radius, landmark, cut line. */
+  const startLiverTool = (cx: number, cy: number): boolean => {
+    const st = liverStore.state
+    const tool = st.tool
+    const vp = getEngine().getViewport(id)
+    const el = elRef.current
+    if (!tool || !vp || !el || !st.grid || st.busy) return false
+    const r = el.getBoundingClientRect()
+    const world = (x: number, y: number): Vec3 => {
+      const w = vp.canvasToWorld([x - r.left, y - r.top])
+      return [w[0], w[1], w[2]]
+    }
+    const redraw = () => refreshRef.current()
+    const p0 = world(cx, cy)
+    const drag = (onMove: (q: Vec3, ev: MouseEvent) => void, onUp: (q: Vec3) => void) => {
+      const move = (ev: MouseEvent) => onMove(world(ev.clientX, ev.clientY), ev)
+      const up = (ev: MouseEvent) => {
+        if (ev.button !== 0) return
+        window.removeEventListener('mousemove', move)
+        window.removeEventListener('mouseup', up, true)
+        onUp(world(ev.clientX, ev.clientY))
+      }
+      window.addEventListener('mousemove', move)
+      window.addEventListener('mouseup', up, true)
+    }
+    const dist = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+    switch (tool) {
+      case 'seed':
+        void liverStore.clickLiver(p0)
+        return true
+      case 'exclude':
+        void liverStore.excludeAt(p0)
+        return true
+      case 'landmark':
+        liverStore.placeLandmark(p0)
+        return true
+      case 'cut':
+        if (st.pendingCut) {
+          liverStore.chooseCutSide(p0)
+          return true
+        }
+        drag(
+          (q) => {
+            liverExtras.current.line = { a: p0, b: q }
+            redraw()
+          },
+          (q) => {
+            liverExtras.current.line = null
+            const n = vp.getCamera().viewPlaneNormal
+            if (n && dist(p0, q) > 5) liverStore.setPendingCut({ a: p0, b: q, view: [n[0], n[1], n[2]] })
+            redraw()
+          }
+        )
+        return true
+      case 'lesion': {
+        let radius = 0
+        drag(
+          (q) => {
+            radius = dist(p0, q)
+            liverExtras.current.lesion = { center: p0, radiusMm: radius }
+            redraw()
+          },
+          () => {
+            liverExtras.current.lesion = null
+            redraw()
+            void liverStore.lesionAt(p0, radius > 3 ? radius : 20)
+          }
+        )
+        return true
+      }
+      default: {
+        // Brushes: dabs along the drag, at most half a brush apart.
+        let last = p0
+        liverStore.paint(p0, 'start')
+        drag(
+          (q, ev) => {
+            const steps = Math.ceil(dist(last, q) / Math.max(1, liverStore.state.brushMm / 2))
+            for (let k = 1; k <= steps; k++)
+              liverStore.paint([last[0] + ((q[0] - last[0]) * k) / steps, last[1] + ((q[1] - last[1]) * k) / steps, last[2] + ((q[2] - last[2]) * k) / steps], 'move')
+            last = q
+            liverExtras.current.cursor = { x: ev.clientX - r.left, y: ev.clientY - r.top }
+          },
+          () => liverStore.paint(last, 'end')
+        )
+        return true
+      }
+    }
   }
 
   /**
@@ -327,6 +423,13 @@ export function Viewport(p: Props) {
       return
     }
     if (e.button !== 0) return
+    if (p.liver && liverStore.state.tool && !e.altKey && !e.shiftKey && !e.ctrlKey) {
+      if (startLiverTool(e.clientX, e.clientY)) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+    }
     if (p.crosshair && !e.altKey && !e.shiftKey && !e.ctrlKey) {
       e.preventDefault()
       e.stopPropagation()
@@ -377,6 +480,18 @@ export function Viewport(p: Props) {
     root.addEventListener('wheel', onWheel, { capture: true, passive: false })
     return () => root.removeEventListener('wheel', onWheel, { capture: true })
   }, [])
+
+  // Liver analysis: redraw this tile's overlay when the masks, landmarks or display change.
+  useEffect(() => {
+    if (!p.liver) return
+    const off = liverStore.subscribe(() => refreshRef.current())
+    refreshRef.current()
+    return () => {
+      off()
+      const c = liverRef.current
+      c?.getContext('2d')?.clearRect(0, 0, c.width, c.height)
+    }
+  }, [p.liver])
 
   // Enable / disable the Cornerstone element for this slot.
   useEffect(() => {
@@ -438,6 +553,7 @@ export function Viewport(p: Props) {
           level: spineLevelAt(vp),
           lines: crossLines(vp)
         })
+        if (propsRef.current.liver && liverRef.current) drawLiverOverlay(liverRef.current, vp, liverStore.state, liverExtras.current)
       })
     }
     refreshRef.current = refresh
@@ -695,6 +811,18 @@ export function Viewport(p: Props) {
       data-slot-index={p.index}
       onMouseDownCapture={onMouseDownCapture}
       ref={slotRef}
+      onMouseMove={(e) => {
+        if (!p.liver || !liverStore.state.tool || !/paint|erase/.test(liverStore.state.tool)) return
+        const r = elRef.current?.getBoundingClientRect()
+        if (!r) return
+        liverExtras.current.cursor = { x: e.clientX - r.left, y: e.clientY - r.top }
+        refreshRef.current()
+      }}
+      onMouseLeave={() => {
+        if (!p.liver || !liverExtras.current.cursor) return
+        liverExtras.current.cursor = null
+        refreshRef.current()
+      }}
       onContextMenu={(e) => {
         e.preventDefault()
         if (suppressMenu.current) {
@@ -727,6 +855,7 @@ export function Viewport(p: Props) {
       }}
     >
       <div ref={elRef} className="v-element" />
+      {p.liver && <canvas ref={liverRef} className="v-liver" />}
       {!hasImages && <div className="v-empty">Drag a series here, or click a thumbnail above</div>}
       {(p.loading || volLoading) && <div className="v-loading">{p.loading || volLoading}</div>}
       {kind !== 'stack' && (

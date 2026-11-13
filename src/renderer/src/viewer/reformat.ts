@@ -584,6 +584,38 @@ export function cpuVolumeCenter(seriesId: number): Vec3 | null {
   return v ? worldOf(v, [(v.dims[0] - 1) / 2, (v.dims[1] - 1) / 2, (v.dims[2] - 1) / 2]) : null
 }
 
+/** The series held in memory, for analysis (liver volumetry): geometry and modality values. */
+export interface CpuVolumeData {
+  /** Columns, rows, evenly spaced planes. */
+  dims: Vec3
+  spacing: Vec3
+  origin: Vec3
+  axes: [Vec3, Vec3, Vec3]
+  modality: string
+  /** Source slices (columns fastest); even plane m reads slice offset z0[m], blended with the
+   *  slice at z0[m] + zNext[m] by weight zW[m]. */
+  data: ArrayLike<number>
+  z0: Int32Array
+  zNext: Int32Array
+  zW: Float32Array
+}
+
+export function cpuVolumeData(seriesId: number): CpuVolumeData | null {
+  const v = volumes.get(seriesId)
+  if (!v) return null
+  return {
+    dims: [...v.dims],
+    spacing: [...v.spacing],
+    origin: [...v.origin],
+    axes: [v.axes[0], v.axes[1], v.axes[2]],
+    modality: v.modality,
+    data: v.data,
+    z0: v.z0,
+    zNext: v.zNext,
+    zW: v.zW
+  }
+}
+
 // ------------------------------------------------------------------ Cornerstone image loader + metadata
 
 function loadReformatImage(imageId: string): { promise: Promise<Types.IImage> } {

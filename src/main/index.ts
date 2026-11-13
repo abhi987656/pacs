@@ -250,6 +250,14 @@ function registerIpc(): void {
     if (!Array.isArray(parsed)) throw new Error('Invalid annotations')
     db.saveAnnotations(asId(id), parsed.length ? json : null)
   })
+  ipcMain.handle('liver:get', (_e, id: unknown, uid: unknown) => (typeof uid === 'string' ? db.getLiverAnalysis(asId(id), uid) : null))
+  ipcMain.handle('liver:save', (_e, id: unknown, uid: unknown, json: unknown) => {
+    if (typeof uid !== 'string' || !uid || uid.length > 200) throw new Error('Invalid series')
+    if (typeof json !== 'string' || json.length > 60_000_000) throw new Error('Invalid liver analysis')
+    const parsed = JSON.parse(json) as { v?: unknown }
+    if (!parsed || typeof parsed !== 'object' || parsed.v !== 1) throw new Error('Invalid liver analysis')
+    db.saveLiverAnalysis(asId(id), uid, json)
+  })
   ipcMain.handle('series:saveThumb', (_e, id: unknown, dataUrl: unknown) => {
     if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/') && dataUrl.length < 200_000) {
       db.setSeriesThumb(asId(id), dataUrl)
@@ -305,6 +313,10 @@ function registerIpc(): void {
   ipcMain.handle('keyimage:send', (_e, img: KeyImage) => {
     if (!img || typeof img.dataUrl !== 'string' || !img.dataUrl.startsWith('data:image/')) return
     mainWin?.webContents.send('keyimage', { dataUrl: img.dataUrl, caption: String(img.caption ?? '') })
+  })
+  ipcMain.handle('report:html', (_e, html: unknown) => {
+    if (typeof html !== 'string' || html.length > 200_000) return
+    mainWin?.webContents.send('report:html', html)
   })
   ipcMain.handle('edit:command', (e, cmd: EditCommand) => {
     const wc = e.sender

@@ -311,6 +311,16 @@ export const ReportPage = forwardRef<ReportPageHandle, Props>(function ReportPag
     ui.toast('Key image added to the report', 'success')
   })
 
+  // Report text sent from the viewer (liver volumetry tables).
+  useEvent(api.onReportHtml, (html: string) => {
+    if (readOnly) {
+      ui.toast('Report is signed off – reopen it to add results.', 'error')
+      return
+    }
+    editor.chain().focus().insertContent(html).run()
+    ui.toast('Results added to the report', 'success')
+  })
+
   // ------------------------------------------------------------ actions
   const toggleFullScreen = () => {
     const next = !fullScreen

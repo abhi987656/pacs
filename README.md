@@ -149,6 +149,33 @@ a second monitor if you have one)
   level (**Thin** goes back to the original images there) – or, in the MPR view, to all three
   planes. The tile label says which ("CORONAL · MinIP 10 mm"); the slab stays with the tile when you
   switch it between planes (3 / ?).
+- **Liver analysis** (toolbar **Liver**, or right-click › Liver Analysis), after the Philips
+  IntelliSpace Portal "CT Liver Analysis": axial, 3D, coronal and sagittal views with a step panel.
+  1. **Liver** – click once inside the liver (portal venous phase works best) and the whole liver is
+     found in 3D; click again on a part that is missing, **Not liver** + click separates an organ it
+     ran into (heart, kidney, stomach …), and the **Add / Remove** brushes (a ball of 2–30 mm) correct
+     the edge. Undo is kept for the last 6 steps.
+  2. **Findings** – click a lesion's centre and drag to its edge: the lesion is segmented in 3D
+     (hypo- or hyperdense), with its volume, HU and the segments it lies in; brushes refine it.
+  3. **Vessels** – contrast-filled veins in the liver (threshold adjustable). With the landmarks of
+     step 4 placed they are sorted into portal and hepatic veins. **Functional liver** = total liver
+     minus vessels and findings.
+  4. **Segments** – guided landmarks, as in the Philips method (Valette): IVC, right and middle
+     hepatic veins, umbilical fissure, right / left portal bifurcation, tip of the left liver and the
+     ligamentum venosum, with a schematic showing where each goes. Levels: right / left liver,
+     right / left lobe, 4 sectors, 7 segments, 8 (Couinaud) or 9 (Bismuth, 4a / 4b). Volumes as mL,
+     % of the total and % of the functional liver.
+  5. **Resection** – tick segments to remove (anatomical) and/or draw a cut line and click the side
+     to remove, or brush tissue out / back in (atypical). The table gives each part, the total
+     resected and the **remnant** (future liver remnant) in mL and % of the total and functional
+     liver, coloured below 40 % / 30 %; each finding shows how much of it (with a safety margin) the
+     plan removes.
+  The 3D view shows the liver or its segments, findings, vessels and the resected part (drag to turn).
+  **Send to report** puts the tables plus the 3D and axial pictures into the open report; **Save**
+  keeps the whole analysis with the study (it reloads when the series is opened in Liver again, and
+  is saved by itself when you leave). Works on built-in graphics (the planes and the analysis run on
+  the processor; the 3D view draws surfaces only). Tested on real CT (contrast and non-contrast):
+  one click gives a Dice overlap of 0.91–0.96 with reference liver masks.
 - **No dedicated graphics card needed**: MPR / coronal / sagittal also run on built-in graphics
   (Intel UHD / Iris, AMD). Windows lets built-in graphics hold only about 128 MB in one piece, so a
   bigger series (for example a 0.625 mm CT with 500+ images) is reformatted **on the processor**
@@ -270,6 +297,7 @@ How it connects, and what is protected:
 | Q / U | Lock / unlock reference lines |
 | = / - | Zoom to fit / zoom 1:1 |
 | N / M | Cine / MPR |
+| Liver (toolbar) | Liver analysis: volume, findings, vessels, segments, resection plan, 3D (Esc drops the liver tool) |
 | Number pad 0–9 | Window presets: 0 = bone, 3 = liver, 4 = original (Num Lock on or off) |
 | 3 / ? | Coronal / sagittal of the active tile; again = back (3 → axial, ? → coronal) |
 | Home / End, PgUp / PgDn, arrows | First / last image, ±10, ±1 |

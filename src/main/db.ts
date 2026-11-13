@@ -357,6 +357,21 @@ export class Db {
     if (v < 3) this.transaction(() => this.migrateV3())
     if (v < 4) this.transaction(() => this.migrateV4())
     if (v < 5) this.transaction(() => this.migrateV5())
+    if (v < 6) this.transaction(() => this.migrateV6())
+  }
+
+  /** Liver analyses (volumetry) saved from the viewer, per study and series. */
+  private migrateV6(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS liver_analysis (
+        study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+        series_uid TEXT NOT NULL,
+        json TEXT NOT NULL,
+        saved_at TEXT NOT NULL,
+        PRIMARY KEY (study_id, series_uid)
+      );
+    `)
+    this.db.exec('PRAGMA user_version = 6')
   }
 
   /** Measurements and labels saved from the viewer (V), per study. */
@@ -842,6 +857,22 @@ export class Db {
   getAnnotations(studyId: number): string | null {
     const r = this.get('SELECT json FROM annotations WHERE study_id = ?', studyId) as Row | undefined
     return r ? str(r.json) : null
+  }
+
+  getLiverAnalysis(studyId: number, seriesUid: string): string | null {
+    const r = this.get('SELECT json FROM liver_analysis WHERE study_id = ? AND series_uid = ?', studyId, seriesUid) as Row | undefined
+    return r ? str(r.json) : null
+  }
+
+  saveLiverAnalysis(studyId: number, seriesUid: string, json: string): void {
+    this.run(
+      `INSERT INTO liver_analysis (study_id, series_uid, json, saved_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(study_id, series_uid) DO UPDATE SET json = excluded.json, saved_at = excluded.saved_at`,
+      studyId,
+      seriesUid,
+      json,
+      new Date().toISOString()
+    )
   }
 
   /** null = nothing saved any more. */

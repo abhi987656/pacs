@@ -580,6 +580,9 @@ export interface PacsApi {
   /** Viewer measurements / labels saved for a study (V), as JSON; null when none were saved. */
   getSavedAnnotations(studyId: number): Promise<string | null>
   saveAnnotations(studyId: number, json: string): Promise<void>
+  /** Liver analysis (volumetry) saved with a study, per series. */
+  getLiverAnalysis(studyId: number, seriesUid: string): Promise<string | null>
+  saveLiverAnalysis(studyId: number, seriesUid: string, json: string): Promise<void>
   // import
   pickAndImport(kind: 'folder' | 'files'): Promise<ImportResult | null>
   importPaths(paths: string[]): Promise<ImportResult>
@@ -590,8 +593,11 @@ export interface PacsApi {
   openViewer(studyId: number): Promise<boolean>
   onViewerLoadStudy(cb: (studyId: number) => void): () => void
   sendKeyImage(img: KeyImage): Promise<void>
+  /** Puts report text (simple HTML: headings, paragraphs, tables) into the open report. */
+  sendReportHtml(html: string): Promise<void>
   saveImage(dataUrl: string, name: string): Promise<string | null>
   onKeyImage(cb: (img: KeyImage) => void): () => void
+  onReportHtml(cb: (html: string) => void): () => void
   onStudiesChanged(cb: () => void): () => void
   openReportFor(studyId: number): Promise<void>
   onOpenReport(cb: (studyId: number) => void): () => void

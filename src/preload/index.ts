@@ -23,6 +23,8 @@ const api: PacsApi = {
   saveSeriesThumb: (id, dataUrl) => ipcRenderer.invoke('series:saveThumb', id, dataUrl),
   getSavedAnnotations: (studyId) => ipcRenderer.invoke('annotations:get', studyId),
   saveAnnotations: (studyId, json) => ipcRenderer.invoke('annotations:save', studyId, json),
+  getLiverAnalysis: (studyId, seriesUid) => ipcRenderer.invoke('liver:get', studyId, seriesUid),
+  saveLiverAnalysis: (studyId, seriesUid, json) => ipcRenderer.invoke('liver:save', studyId, seriesUid, json),
 
   pickAndImport: (kind) => ipcRenderer.invoke('import:pick', kind),
   importPaths: (paths) => ipcRenderer.invoke('import:paths', paths),
@@ -37,8 +39,10 @@ const api: PacsApi = {
     return off
   },
   sendKeyImage: (img) => ipcRenderer.invoke('keyimage:send', img),
+  sendReportHtml: (html) => ipcRenderer.invoke('report:html', html),
   saveImage: (dataUrl, name) => ipcRenderer.invoke('image:save', dataUrl, name),
   onKeyImage: (cb) => on('keyimage', cb),
+  onReportHtml: (cb) => on('report:html', cb),
   onStudiesChanged: (cb) => on('studies:changed', cb),
   openReportFor: (id) => ipcRenderer.invoke('report:openFor', id),
   onOpenReport: (cb) => on('report:open', cb),

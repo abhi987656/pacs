@@ -22,6 +22,7 @@ import {
   Heart,
   Info,
   Lasso,
+  Layers,
   Link,
   Link2,
   Lock,
@@ -83,6 +84,7 @@ import {
   cpuPlanePoint,
   cpuPlaneStack,
   cpuVolumeCenter,
+  cpuVolumeData,
   ensureCpuVolume,
   nextSlab,
   PROJECTION_MM,
@@ -94,6 +96,10 @@ import type { Plane, Projection, ProjectionMode, Vec3 } from './reformat'
 import { clearSpineLabels, setSpineNotifier } from './spine'
 import { SpinePanel } from './SpinePanel'
 import { Viewport } from './Viewport'
+import { LiverPanel } from './liver/LiverPanel'
+import { captureLiver3D, Liver3D } from './liver/Liver3D'
+import { liverStore } from './liver/store'
+import { reportHtml } from './liver/report'
 import type { CrossPlane, SlotInfo } from './Viewport'
 
 const api = window.api
@@ -194,6 +200,8 @@ interface MprState {
   fromIndex: number
   /** The planes are computed on the processor (series too big for the graphics card). */
   cpu: boolean
+  /** The liver analysis: axial, 3-D, coronal and sagittal tiles with the liver panel. */
+  liver?: boolean
 }
 
 /** Crosshair line colours of the MPR planes (as Cornerstone draws them on the graphics card). */
@@ -249,6 +257,7 @@ const HELP: [string, string][] = [
   ['Q / U', 'Lock / unlock reference lines'],
   ['= / -', 'Zoom to fit / zoom 1:1'],
   ['N / M', 'Cine / MPR (axial, sagittal, coronal)'],
+  ['Liver (toolbar) / right-click › Liver Analysis', 'Liver volume from one click, findings, vessels, Couinaud segments from landmarks, resection plan with the remaining liver, 3D (Esc drops the liver tool)'],
   ['Number pad 0 – 9', `Window presets: 0 = bone, 3 = liver, 1 = soft tissue, 2 = lung, 5 – 9 head / CTA, ${ORIGINAL_PRESET_KEY} = original (Num Lock on or off)`],
   ['3 / ?', 'Coronal / sagittal view of the tile; press again to go back (3 = axial, ? = coronal)'],
   ['Slab menu (toolbar) / right-click › MIP / MinIP', 'Thick slab: MIP (brightest) or MinIP (darkest) on the active tile or the MPR view'],
@@ -324,6 +333,8 @@ export function ViewerApp() {
   const slabNoticeAt = useRef(-Infinity)
   const mprRef = useRef(mpr)
   mprRef.current = mpr
+  /** Leaving the liver analysis: saves unsaved results with the study, then lets go of them. */
+  const liverLeaveRef = useRef<() => void>(() => {})
   const expected = useRef(new Map<string, number>())
 
   const isLinked = (slotId: string, l = linkRef.current) => l.scrollLink && (l.linkMembers == null || l.linkMembers.includes(slotId))
@@ -393,6 +404,7 @@ export function ViewerApp() {
   /** Back to the tiles from before the MPR (callers may change them further right after). */
   const exitMpr = useCallback(() => {
     const m = mprRef.current
+    if (m?.liver) liverLeaveRef.current()
     if (m) {
       setLayout(m.prevLayout)
       setSlots(m.prevSlots)
@@ -738,6 +750,92 @@ export function ViewerApp() {
     setLocked(true)
   }
 
+  // ------------------------------------------------------------ liver analysis
+  const enterLiver = async () => {
+    const from = mpr && !mpr.liver ? { seriesId: mpr.seriesId, studyId: mpr.studyId } : null
+    if (mpr) exitMpr()
+    const slot = from ? null : slotsRef.current[activeRef.current]
+    const seriesId = from?.seriesId ?? slot?.seriesId
+    const studyId = from?.studyId ?? slot?.studyId
+    if (seriesId == null || studyId == null) {
+      ui.toast('Select a tile with a CT series first.', 'info')
+      return
+    }
+    const modality = seriesById.get(seriesId)?.modality ?? ''
+    if (modality && modality !== 'CT') {
+      ui.toast('The liver analysis works on CT series (it reads Hounsfield units).', 'info')
+      return
+    }
+    const imgs = await ensureImages(seriesId)
+    if (!imgs.reconstructable) {
+      ui.toast('The liver analysis needs a CT series of parallel slices (a thin axial series works best).', 'error')
+      return
+    }
+    // Always on the processor: the analysis needs the series in memory anyway.
+    setMpr({ seriesId, studyId, prevLayout: layout, prevSlots: slotsRef.current, fromIndex: activeRef.current, cpu: true, liver: true })
+    setLayout({ rows: 2, cols: 2 })
+    setMaximized(null)
+    setSlots((['axial', 'coronal', 'sagittal'] as Plane[]).map((k) => ({ id: `mpr-${k}`, kind: k, seriesId, studyId, cpu: true })))
+    setActive(0)
+    setTool('Crosshairs')
+    setLocked(true)
+  }
+
+  // Once the series is in memory: the analysis grid, and any analysis saved with the study.
+  useEffect(() => {
+    if (!mpr?.liver || mprLoading) return
+    const st = liverStore.state
+    if (st.active && st.seriesId === mpr.seriesId) return
+    const cv = cpuVolumeData(mpr.seriesId)
+    if (!cv) return
+    const uid = seriesById.get(mpr.seriesId)?.seriesUid || `series-${mpr.seriesId}`
+    void (async () => {
+      try {
+        await liverStore.open(mpr.seriesId, mpr.studyId, uid, cv)
+        const saved = await api.getLiverAnalysis(mpr.studyId, uid)
+        if (saved && liverStore.state.seriesId === mpr.seriesId && (await liverStore.restore(saved))) ui.toast('The liver analysis saved with this study was loaded', 'info')
+      } catch (e) {
+        console.error(e)
+        ui.toast(`Liver analysis: ${(e as Error).message}`, 'error')
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mpr, mprLoading])
+
+  const saveLiver = async (quiet = false) => {
+    const st = liverStore.state
+    const json = liverStore.serialize()
+    if (!json || st.studyId == null) return
+    try {
+      await api.saveLiverAnalysis(st.studyId, st.seriesUid, json)
+      liverStore.markSaved()
+      if (!quiet) ui.toast('Liver analysis saved with the study', 'success')
+    } catch (e) {
+      ui.toast(`Could not save the liver analysis: ${(e as Error).message}`, 'error')
+    }
+  }
+  liverLeaveRef.current = () => {
+    const st = liverStore.state
+    if (st.liver && !st.saved) {
+      void saveLiver(true).then(() => ui.toast('Liver analysis saved with the study', 'success'))
+      // serialize() ran before close(): the save above already has the data
+    }
+    setTimeout(() => liverStore.close(), 0)
+  }
+
+  const liverToReport = async () => {
+    const st = liverStore.state
+    const se = st.seriesId != null ? seriesById.get(st.seriesId) : undefined
+    const html = reportHtml(st, se ? `${se.number ?? ''} ${se.description}`.trim() : '')
+    if (!html) return
+    await api.sendReportHtml(html)
+    const shot = await captureLiver3D()
+    if (shot) await api.sendKeyImage({ dataUrl: shot, caption: 'Liver analysis – 3D' })
+    const axial = await captureSlot('mpr-axial', 900, 'image/jpeg')
+    if (axial) await api.sendKeyImage({ dataUrl: axial.dataUrl, caption: 'Liver analysis – axial' })
+    ui.toast('Liver volumetry sent to the report', 'success')
+  }
+
   /** Processor-computed MPR: the other tiles show the planes through `world` (crosshair click / drag). */
   const moveCross = (fromId: string, world: Vec3) => {
     const m = mprRef.current
@@ -931,6 +1029,8 @@ export function ViewerApp() {
   const chooseTool = (t: ToolName, lock: boolean) => {
     const tip = TOOL_TIPS[t]
     if (tip && toolRef.current.tool !== t) ui.toast(tip, 'info')
+    // A viewer tool chosen during the liver analysis takes the left button back from the liver tool.
+    if (mprRef.current?.liver && liverStore.state.tool) liverStore.ui({ tool: null, pendingCut: null })
     setTool(t)
     setLocked(lock || isDragMode(t) || STICKY_TOOLS.includes(t))
   }
@@ -1188,9 +1288,11 @@ export function ViewerApp() {
   }
 
   /** The active tile as an image, with measurements burnt in. */
-  const captureActive = async (maxW = 0, type: 'image/jpeg' | 'image/png' = 'image/png') => {
-    const slot = slotsRef.current[active]
-    const vp = activeVp()
+  const captureActive = (maxW = 0, type: 'image/jpeg' | 'image/png' = 'image/png') => captureSlot(slotsRef.current[active]?.id, maxW, type)
+
+  const captureSlot = async (slotId: string | undefined, maxW = 0, type: 'image/jpeg' | 'image/png' = 'image/png') => {
+    const slot = slotsRef.current.find((x) => x.id === slotId)
+    const vp = slot ? getEngine().getViewport(slot.id) : undefined
     if (!vp || !slot) return null
     const src = vp.canvas
     const out = document.createElement('canvas')
@@ -1200,6 +1302,9 @@ export function ViewerApp() {
     ctx.fillStyle = '#000'
     ctx.fillRect(0, 0, out.width, out.height)
     ctx.drawImage(src, 0, 0)
+    // The liver analysis colours of the tile.
+    const liverCanvas = (vp.element as HTMLElement).parentElement?.querySelector('canvas.v-liver') as HTMLCanvasElement | null
+    if (liverCanvas && liverCanvas.width) ctx.drawImage(liverCanvas, 0, 0, out.width, out.height)
     const svg = (vp.element as HTMLElement).querySelector('svg')
     if (svg && showAnn) {
       const clone = svg.cloneNode(true) as SVGSVGElement
@@ -1445,6 +1550,7 @@ export function ViewerApp() {
       else if (k === ' ') toggleCine()
       else if (k === 'Delete' && e.shiftKey) void clearAnnotations()
       else if (k === 'Delete' || k === 'Backspace') deleteSelectedAnnotations()
+      else if (k === 'Escape' && mpr?.liver && (liverStore.state.tool || liverStore.state.pendingCut)) liverStore.ui({ tool: null, pendingCut: null })
       else if (k === 'Escape') {
         if (!isDragMode(tool) && tool !== 'Crosshairs') chooseTool('WindowLevel', true)
         else if (mpr) exitMpr()
@@ -1635,7 +1741,8 @@ export function ViewerApp() {
     { label: 'Reset image', hint: 'F5', onClick: () => transform('reset') },
     { label: 'Full screen', hint: 'F11', checked: fullScreen, onClick: toggleFullScreen },
     'sep',
-    { label: mpr ? 'Exit MPR View' : 'MPR View…', hint: 'M', onClick: () => void (mpr ? exitMpr() : enterMpr()) },
+    { label: mpr && !mpr.liver ? 'Exit MPR View' : 'MPR View…', hint: 'M', onClick: () => void (mpr && !mpr.liver ? exitMpr() : enterMpr()) },
+    { label: mpr?.liver ? 'Exit Liver Analysis' : 'Liver Analysis (volumetry)…', onClick: () => void (mpr?.liver ? exitMpr() : enterLiver()) },
     {
       label: 'Plane',
       disabled: !!mpr,
@@ -1821,7 +1928,14 @@ export function ViewerApp() {
           <RotateCcw size={17} />
         </VBtn>
         <span className="v-sep" />
-        <VBtn title="MPR view – axial / sagittal / coronal (M)" on={!!mpr} onClick={() => void (mpr ? exitMpr() : enterMpr())}>
+        <VBtn
+          title="Liver analysis – liver volume, findings, vessels, Couinaud segments, resection planning, 3D"
+          on={!!mpr?.liver}
+          onClick={() => void (mpr?.liver ? exitMpr() : enterLiver())}
+        >
+          <Layers size={17} /> Liver
+        </VBtn>
+        <VBtn title="MPR view – axial / sagittal / coronal (M)" on={!!mpr && !mpr.liver} onClick={() => void (mpr && !mpr.liver ? exitMpr() : enterMpr())}>
           <Box size={17} /> MPR
         </VBtn>
         {mpr && toolBtn('Crosshairs', 'Crosshairs', <Crosshair size={17} />)}
@@ -1903,6 +2017,8 @@ export function ViewerApp() {
         </VBtn>
       </div>
 
+      <div className="v-body">
+      {mpr?.liver && <LiverPanel onClose={exitMpr} onReport={() => void liverToReport()} onSave={() => void saveLiver()} />}
       <div
         ref={gridRef}
         className="v-grid"
@@ -1912,11 +2028,12 @@ export function ViewerApp() {
         }}
       >
         {ready &&
-          slots.map((slot, i) => {
+          slots.flatMap((slot, i) => {
             const se = slot.seriesId != null ? seriesById.get(slot.seriesId) : undefined
-            return (
+            const tile = (
               <Viewport
                 key={slot.id}
+                liver={!!mpr?.liver && slot.id.startsWith('mpr-')}
                 slot={slot}
                 index={i}
                 active={i === active && slots.length > 1}
@@ -1951,6 +2068,8 @@ export function ViewerApp() {
                 onImageChange={onImageChange}
               />
             )
+            // Liver analysis: the 3-D view sits top right, next to the axial tile.
+            return mpr?.liver && i === 0 ? [tile, <Liver3D key="liver-3d" />] : [tile]
           })}
         {!ready && <div className="v-welcome">Starting viewer…</div>}
         {ready && tool === 'SpineLabel' && (
@@ -1961,6 +2080,7 @@ export function ViewerApp() {
             onClose={() => chooseTool('WindowLevel', true)}
           />
         )}
+      </div>
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}

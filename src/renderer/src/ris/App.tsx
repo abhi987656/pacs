@@ -82,6 +82,10 @@ export function App() {
     if (page.name !== 'report') ui.toast('Open a report first to add key images.', 'info')
   })
 
+  useEvent(api.onReportHtml, () => {
+    if (page.name !== 'report') ui.toast('Open a report first to add the results.', 'info')
+  })
+
   useEvent(api.onToggleDictation, () => {
     if (page.name !== 'report') ui.toast('Open a report to dictate (F4).', 'info')
   })
