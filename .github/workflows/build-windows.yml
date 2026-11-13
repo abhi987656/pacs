@@ -83,4 +83,4 @@ jobs:
           gh release create windows-latest dist/*.exe \
             --prerelease --target "$GITHUB_SHA" \
             --title "Windows app – latest build" \
-            --notes "Personal PACS for Windows, build ${{ github.run_number }} (commit ${GITHUB_SHA::7}). PersonalPACS-Setup-*.exe is the user software (sign in, then the administrator approves); PersonalPACS-Master-Setup-*.exe is the master software (signs in with the master account and approves users). Portable-*.exe versions run without installing."
+            --notes "Personal PACS for Windows, build ${{ github.run_number }} (commit ${GITHUB_SHA::7}). PersonalPACS-Setup-*.exe is the user software (sign in, then the administrator approves); PersonalPACS-Master-Setup-*.exe is the master software (signs in with the master account and approves users)."

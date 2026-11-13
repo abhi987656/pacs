@@ -200,7 +200,7 @@ a second monitor if you have one)
 1. On GitHub, open this repository's **Releases** (right-hand side of the main page) and open
    **Windows app – latest build**.
 2. Download and run `PersonalPACS-Setup-x.y.z.exe`. It installs for your user only, so no admin
-   rights are needed. `PersonalPACS-Portable-x.y.z.exe` runs without installing.
+   rights are needed.
 3. Windows may show "Windows protected your PC" because the app is not code-signed. Click
    **More info → Run anyway**.
 
@@ -340,7 +340,7 @@ npm install
 npm run dev        # run with hot reload
 npm run typecheck
 npm run build      # production build into out/
-npm run dist:win   # Windows installer + portable exe into dist/ (run on Windows)
+npm run dist:win   # Windows installer into dist/ (run on Windows)
 npm run dist:win:master   # the master software (same, with PACS_EDITION=master)
 # Sign-in needs SUPABASE_URL and SUPABASE_ANON_KEY in the environment at build time.
 ```

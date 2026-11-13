@@ -11,5 +11,3 @@ win:
 nsis:
   shortcutName: Personal PACS Master
   artifactName: PersonalPACS-Master-Setup-${version}.${ext}
-portable:
-  artifactName: PersonalPACS-Master-Portable-${version}.${ext}

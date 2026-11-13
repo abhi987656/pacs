@@ -27,8 +27,6 @@ win:
   target:
     - target: nsis
       arch: [x64]
-    - target: portable
-      arch: [x64]
 nsis:
   oneClick: false
   perMachine: false
@@ -38,6 +36,4 @@ nsis:
   shortcutName: Personal PACS
   artifactName: PersonalPACS-Setup-${version}.${ext}
   deleteAppDataOnUninstall: false
-portable:
-  artifactName: PersonalPACS-Portable-${version}.${ext}
 npmRebuild: false
