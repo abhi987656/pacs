@@ -32,6 +32,9 @@ import { getSpeechModel } from './speechModels'
 import { buildSeriesImages, sortInstances } from './sortImages'
 import { createMainWindow, createViewerWindow, setSpellWordHandler } from './windows'
 import { MEDICAL_WORDS } from '@shared/medicalWords'
+import type { MemberStatus } from '@shared/types'
+import { createAccess } from './access'
+import type { AccessService } from './access/core'
 
 // Tests run two copies of the app side by side (sender and receiver), each with its own profile.
 if (process.env.PACS_USER_DATA_DIR) app.setPath('userData', process.env.PACS_USER_DATA_DIR)
@@ -45,6 +48,8 @@ let speech: SpeechService
 let phone: PhoneLink
 let shares: ShareHost
 let receiver: ShareReceiver
+let access: AccessService
+let servicesStarted = false
 let mainWin: BrowserWindow | null = null
 let viewerWin: BrowserWindow | null = null
 let viewerReady = false
@@ -133,6 +138,7 @@ async function runImport(inputPaths: string[]): Promise<ImportResult> {
 }
 
 function openViewer(studyId: number): void {
+  if (!access.unlocked) return // signed out / not approved: no images
   if (!viewerWin || viewerWin.isDestroyed()) {
     viewerReady = false
     viewerWin = createViewerWindow(mainWin)
@@ -192,7 +198,40 @@ function applySpelling(s: Settings): void {
   }
 }
 
+const text = (v: unknown, max: number): string => {
+  if (typeof v !== 'string' || v.length > max) throw new Error('Invalid input')
+  return v
+}
+const uuid = (v: unknown): string => {
+  if (typeof v !== 'string' || !/^[0-9a-f-]{36}$/i.test(v)) throw new Error('Invalid id')
+  return v
+}
+const MEMBER_STATUS: MemberStatus[] = ['pending', 'approved', 'denied', 'revoked']
+const deviceCount = (v: unknown): number => {
+  const n = Number(v)
+  if (!Number.isInteger(n) || n < 1 || n > 100) throw new Error('The computer limit must be 1 – 100')
+  return n
+}
+
 function registerIpc(): void {
+  // ---------------- access (sign-in; the master's user list)
+  ipcMain.handle('access:get', () => access.state)
+  ipcMain.handle('access:check', () => access.check())
+  ipcMain.handle('access:signUp', (_e, name: unknown, email: unknown, password: unknown) =>
+    access.signUp(text(name, 120), text(email, 254), text(password, 128))
+  )
+  ipcMain.handle('access:signIn', (_e, email: unknown, password: unknown) => access.signIn(text(email, 254), text(password, 128)))
+  ipcMain.handle('access:signOut', () => access.signOut())
+  ipcMain.handle('access:askAgain', () => access.askAgain())
+  ipcMain.handle('access:admin:list', () => access.adminList())
+  ipcMain.handle('access:admin:decide', (_e, userId: unknown, status: unknown, max: unknown) => {
+    if (!MEMBER_STATUS.includes(status as MemberStatus)) throw new Error('Invalid status')
+    return access.adminDecide(uuid(userId), status as MemberStatus, max == null ? undefined : deviceCount(max))
+  })
+  ipcMain.handle('access:admin:devices', (_e, userId: unknown, max: unknown) => access.adminSetDevices(uuid(userId), deviceCount(max)))
+  ipcMain.handle('access:admin:removeDevice', (_e, deviceId: unknown) => access.adminRemoveDevice(uuid(deviceId)))
+  ipcMain.handle('access:admin:delete', (_e, userId: unknown) => access.adminDeleteMember(uuid(userId)))
+
   // ---------------- studies
   ipcMain.handle('studies:list', (_e, filter: StudyFilter) => db.listStudies(filter ?? {}))
   ipcMain.handle('studies:get', (_e, id: unknown) => {
@@ -573,7 +612,16 @@ function registerIpc(): void {
   })
 }
 
-app.whenReady().then(() => {
+/** Phone link and case sharing serve the archive: only once the software may be used. */
+function startServices(): void {
+  if (servicesStarted) return
+  servicesStarted = true
+  void phone.init()
+  void receiver.cleanup()
+  void shares.init()
+}
+
+app.whenReady().then(async () => {
   if (!firstInstance) return
   // No menu bar: keeps the Alt key free for viewer shortcuts (Alt+C compare, Alt+drag W/L …).
   Menu.setApplicationMenu(null)
@@ -605,13 +653,18 @@ app.whenReady().then(() => {
     () => broadcast('studies:changed'),
     netFetch
   )
+  access = await createAccess()
+  access.onChange((state) => {
+    broadcast('access:changed', state)
+    if (access.unlocked) startServices()
+    else if (viewerWin && !viewerWin.isDestroyed()) viewerWin.close()
+  })
   registerIpc()
   registerLinkHandler()
   applySpelling(db.getSettings())
   setSpellWordHandler((w) => addSpellWord(w))
-  void phone.init()
-  void receiver.cleanup()
-  void shares.init()
+  if (access.unlocked) startServices()
+  void access.check()
   mainWin = createMainWindow()
   mainWin.on('closed', () => {
     mainWin = null

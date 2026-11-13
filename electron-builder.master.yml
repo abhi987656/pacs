@@ -1,0 +1,15 @@
+# The master software: same app, built with PACS_EDITION=master (approves the users of Personal PACS).
+# Its own app id and name, so it installs next to the user software with its own settings and sign-in.
+extends: ./electron-builder.yml
+appId: com.personalpacs.master
+productName: Personal PACS Master
+extraMetadata:
+  name: personal-pacs-master
+  productName: Personal PACS Master
+win:
+  executableName: PersonalPACSMaster
+nsis:
+  shortcutName: Personal PACS Master
+  artifactName: PersonalPACS-Master-Setup-${version}.${ext}
+portable:
+  artifactName: PersonalPACS-Master-Portable-${version}.${ext}

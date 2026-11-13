@@ -555,6 +555,69 @@ export interface DataInfo {
   appVersion: string
 }
 
+// ------------------------------------------------------------------ access (master / user editions)
+
+/** The user software asks for access; the master software grants it (Supabase). */
+export type Edition = 'user' | 'master'
+
+export type AccessStatus =
+  /** No Supabase project in this build: no sign-in, everything open. */
+  | 'off'
+  | 'checking'
+  | 'signed-out'
+  | 'pending'
+  | 'denied'
+  | 'revoked'
+  /** Approved, but the account already uses all the computers it may. */
+  | 'device-limit'
+  | 'approved'
+  /** Master software: the account is not a master account. */
+  | 'not-admin'
+  /** The server could not be reached and there is no recent approval on this computer. */
+  | 'offline'
+  | 'error'
+
+export interface AccessState {
+  edition: Edition
+  status: AccessStatus
+  name?: string
+  email?: string
+  /** Approved without reaching the server: works until then (ms since 1970). */
+  offlineUntil?: number
+  /** Last check with the server (ms since 1970). */
+  checkedAt?: number
+  maxDevices?: number
+  devices?: number
+  message?: string
+}
+
+export type MemberStatus = 'pending' | 'approved' | 'denied' | 'revoked'
+
+export interface AccessMember {
+  user_id: string
+  name: string
+  email: string
+  status: MemberStatus
+  max_devices: number
+  requested_at: string
+  decided_at: string | null
+}
+
+export interface AccessDevice {
+  id: string
+  user_id: string
+  name: string
+  platform: string
+  app_version: string
+  first_seen: string
+  last_seen: string
+}
+
+export interface AccessAdminData {
+  members: AccessMember[]
+  devices: AccessDevice[]
+}
+
 export interface KeyImage {
   dataUrl: string
   caption: string
@@ -564,6 +627,19 @@ export type EditCommand = 'cut' | 'copy' | 'paste' | 'selectAll'
 
 // The API exposed on window.api by the preload script.
 export interface PacsApi {
+  // access (sign-in of the user software; the master software's user list)
+  getAccess(): Promise<AccessState>
+  checkAccess(): Promise<AccessState>
+  signUp(name: string, email: string, password: string): Promise<AccessState>
+  signIn(email: string, password: string): Promise<AccessState>
+  signOut(): Promise<AccessState>
+  askAccessAgain(): Promise<AccessState>
+  onAccessChanged(cb: (s: AccessState) => void): () => void
+  adminList(): Promise<AccessAdminData>
+  adminDecide(userId: string, status: MemberStatus, maxDevices?: number): Promise<void>
+  adminSetDevices(userId: string, maxDevices: number): Promise<void>
+  adminRemoveDevice(deviceId: string): Promise<void>
+  adminDeleteMember(userId: string): Promise<void>
   platform: string
   // studies
   listStudies(filter: StudyFilter): Promise<StudyRow[]>

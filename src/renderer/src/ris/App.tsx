@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ClipboardList, FileText, Settings as SettingsIcon, BookText } from 'lucide-react'
+import { ClipboardList, FileText, Settings as SettingsIcon, BookText, Users } from 'lucide-react'
 import logoMark from '../assets/logo-mark.png'
 import type { Settings, StudyFilter } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
@@ -13,12 +13,15 @@ import { ReportPage } from './ReportPage'
 import type { ReportPageHandle } from './ReportPage'
 import { SettingsPage } from './SettingsPage'
 import { TemplatesPage } from './TemplatesPage'
+import { UsersPage, usePendingCount } from './UsersPage'
+import { useAccess } from './AccessGate'
 
 export type Page =
   | { name: 'worklist' }
   | { name: 'report'; studyId: number }
   | { name: 'settings' }
   | { name: 'templates'; tab?: 'templates' | 'macros' }
+  | { name: 'users' }
 
 const api = window.api
 
@@ -30,6 +33,10 @@ export function App() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const reportRef = useRef<ReportPageHandle>(null)
+  // Master software: the Users page and the number of requests waiting.
+  const access = useAccess()
+  const isMaster = access?.edition === 'master' && access.status === 'approved'
+  const [pending, setPending] = usePendingCount(isMaster)
   const receiveRef = useRef<ReceiveCenterHandle>(null)
 
   useEffect(() => {
@@ -110,6 +117,9 @@ export function App() {
       }
     },
     { key: 'templates', icon: <BookText size={20} />, label: 'Templates & macros', go: () => navigate({ name: 'templates' }) },
+    ...(isMaster
+      ? [{ key: 'users', icon: <Users size={20} />, label: pending ? `Users – ${pending} waiting` : 'Users', go: () => navigate({ name: 'users' }), badge: pending }]
+      : []),
     { key: 'settings', icon: <SettingsIcon size={20} />, label: 'Settings', go: () => navigate({ name: 'settings' }) }
   ]
 
@@ -127,6 +137,7 @@ export function App() {
             onClick={() => void r.go()}
           >
             {r.icon}
+            {'badge' in r && !!r.badge && <span className="rail-badge">{r.badge}</span>}
           </button>
         ))}
       </nav>
@@ -157,6 +168,7 @@ export function App() {
         )}
         {page.name === 'settings' && <SettingsPage settings={settings} onSaved={setSettings} />}
         {page.name === 'templates' && <TemplatesPage initialTab={page.tab ?? 'templates'} settings={settings} />}
+        {page.name === 'users' && isMaster && <UsersPage onPending={setPending} />}
       </div>
       <ReceiveCenter ref={receiveRef} onOpenCase={(id) => void openReport(id)} />
     </div>

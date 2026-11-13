@@ -9,6 +9,18 @@ function on<T extends unknown[]>(channel: string, cb: (...args: T) => void): () 
 }
 
 const api: PacsApi = {
+  getAccess: () => ipcRenderer.invoke('access:get'),
+  checkAccess: () => ipcRenderer.invoke('access:check'),
+  signUp: (name, email, password) => ipcRenderer.invoke('access:signUp', name, email, password),
+  signIn: (email, password) => ipcRenderer.invoke('access:signIn', email, password),
+  signOut: () => ipcRenderer.invoke('access:signOut'),
+  askAccessAgain: () => ipcRenderer.invoke('access:askAgain'),
+  onAccessChanged: (cb) => on('access:changed', cb),
+  adminList: () => ipcRenderer.invoke('access:admin:list'),
+  adminDecide: (userId, status, maxDevices) => ipcRenderer.invoke('access:admin:decide', userId, status, maxDevices ?? null),
+  adminSetDevices: (userId, maxDevices) => ipcRenderer.invoke('access:admin:devices', userId, maxDevices),
+  adminRemoveDevice: (deviceId) => ipcRenderer.invoke('access:admin:removeDevice', deviceId),
+  adminDeleteMember: (userId) => ipcRenderer.invoke('access:admin:delete', userId),
   platform: process.platform,
   listStudies: (filter) => ipcRenderer.invoke('studies:list', filter),
   getStudy: (id) => ipcRenderer.invoke('studies:get', id),

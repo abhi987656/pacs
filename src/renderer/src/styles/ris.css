@@ -1546,3 +1546,226 @@ table.grid .muted {
   border-radius: 10px;
   font-size: 12px;
 }
+
+/* ================================================= sign-in and access (user / master software) */
+.access-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 30%, #17201b, #050505 70%);
+}
+.access-card {
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  background: #121214;
+  border: 1px solid #2a2a2e;
+  border-radius: 12px;
+  padding: 24px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.access-card h2 {
+  margin: 4px 0 0;
+  font-size: 17px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+}
+.access-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.access-app {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+}
+.access-sub {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.access-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.access-form input {
+  width: 100%;
+}
+.access-tabs {
+  margin-left: 0;
+}
+.access-tabs button {
+  flex: 1;
+}
+.access-who {
+  margin: 0;
+  color: #cfe9d8;
+  font-weight: 600;
+}
+.access-text {
+  margin: 0;
+  line-height: 1.45;
+  color: #d4d4d8;
+}
+.access-text.dim {
+  color: var(--ink-dim);
+  font-size: 12.5px;
+}
+.access-error {
+  background: #3a1d1d;
+  color: #ffb4ab;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.access-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.offline-pill {
+  position: fixed;
+  right: 12px;
+  bottom: 10px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #3a3015;
+  color: #ffd877;
+  border: 1px solid #6a5420;
+  border-radius: 14px;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+.rail-btn {
+  position: relative;
+}
+.rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+.account-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ================================================= master software: users */
+.users-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.users-body {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.users-tabs {
+  margin-left: 0;
+  align-self: flex-start;
+}
+.users-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 11px;
+}
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.users-table th {
+  text-align: left;
+  color: var(--ink-dim);
+  font-weight: 600;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.users-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #1d1d21;
+  vertical-align: middle;
+}
+.users-name {
+  font-weight: 600;
+  color: #fff;
+}
+.users-status {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.users-status.st-pending {
+  background: #3a3015;
+  color: #ffd877;
+}
+.users-status.st-approved {
+  background: #18301f;
+  color: #9fe3b1;
+}
+.users-status.st-denied,
+.users-status.st-revoked {
+  background: #3d1717;
+  color: #ff9c91;
+}
+.users-limit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.users-limit input {
+  width: 52px;
+}
+.users-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.users-device td {
+  font-size: 12.5px;
+  background: #0f0f11;
+}
+.users-error {
+  background: #3a1d1d;
+  color: #ffb4ab;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+.users-empty {
+  padding: 24px 0;
+}
+.users-note {
+  font-size: 12px;
+  max-width: 900px;
+}

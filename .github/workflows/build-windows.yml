@@ -31,13 +31,42 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      # Sign-in of the user software and the master software: the Supabase project's URL and public
+      # (anon) key, from the repository's secrets (Settings › Secrets and variables › Actions).
+      # Without them the builds have no sign-in at all.
+      - name: Check the Supabase settings
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::warning::SUPABASE_URL / SUPABASE_ANON_KEY secrets are not set – these builds have no sign-in (anyone can use them)."
+          fi
+
       # Electron and the installer tools are downloaded from GitHub during the build; those
       # downloads now and then fail with a 502/504, so try up to three times.
-      - name: Build installer (.exe)
+      - name: Build the user software (.exe)
         shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           for i in 1 2 3; do
             npm run dist:win && exit 0
+            echo "::warning::Build attempt $i failed (often a download error) – trying again in 30 s"
+            sleep 30
+          done
+          exit 1
+
+      - name: Build the master software (.exe)
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          for i in 1 2 3; do
+            npm run dist:win:master && exit 0
             echo "::warning::Build attempt $i failed (often a download error) – trying again in 30 s"
             sleep 30
           done
@@ -54,4 +83,4 @@ jobs:
           gh release create windows-latest dist/*.exe \
             --prerelease --target "$GITHUB_SHA" \
             --title "Windows app – latest build" \
-            --notes "Personal PACS for Windows, build ${{ github.run_number }} (commit ${GITHUB_SHA::7}). PersonalPACS-Setup-*.exe installs for your user; PersonalPACS-Portable-*.exe runs without installing."
+            --notes "Personal PACS for Windows, build ${{ github.run_number }} (commit ${GITHUB_SHA::7}). PersonalPACS-Setup-*.exe is the user software (sign in, then the administrator approves); PersonalPACS-Master-Setup-*.exe is the master software (signs in with the master account and approves users). Portable-*.exe versions run without installing."

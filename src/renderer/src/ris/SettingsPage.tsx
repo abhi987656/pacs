@@ -7,6 +7,7 @@ import { FONT_FAMILIES, FONT_SIZES } from './editor'
 import { SpeechModelsPanel } from './DictationControl'
 import { PhonePanel } from './PhonePanel'
 import { SharesList, useShares } from './Sharing'
+import { useAccess } from './AccessGate'
 
 const api = window.api
 
@@ -68,6 +69,7 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
         </div>
       </header>
       <div className="settings-scroll">
+        <AccountCard />
         <section className="card">
           <h3>Radiologist</h3>
           <div className="grid2">
@@ -383,5 +385,51 @@ function MyWords() {
         </div>
       )}
     </div>
+  )
+}
+
+/** Who is signed in, and when this computer last checked its access with the server. */
+function AccountCard() {
+  const a = useAccess()
+  const [busy, setBusy] = useState(false)
+  if (!a) return null
+  const master = a.edition === 'master'
+  const run = async (job: () => Promise<unknown>) => {
+    setBusy(true)
+    try {
+      await job()
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="card">
+      <h3>Account</h3>
+      {a.status === 'off' ? (
+        <p className="muted">Sign-in is not set up in this build (no Supabase project), so everything is open.</p>
+      ) : (
+        <div className="account-line">
+          <div>
+            <div>
+              <strong>{a.name && a.name !== a.email ? a.name : a.email}</strong> {a.name && a.name !== a.email ? <span className="muted">{a.email}</span> : null}
+            </div>
+            <div className="muted small">
+              {master ? 'Master account' : 'Approved'}
+              {!master && a.maxDevices ? ` · may be used on ${a.maxDevices} computer${a.maxDevices === 1 ? '' : 's'}` : ''}
+              {a.checkedAt ? ` · last check with the server ${new Date(a.checkedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}` : ''}
+              {a.offlineUntil ? ` · offline until ${new Date(a.offlineUntil).toLocaleDateString(undefined, { dateStyle: 'medium' })}` : ''}
+            </div>
+          </div>
+          <div className="row-btns">
+            <button className="btn btn-small" disabled={busy} onClick={() => void run(api.checkAccess)}>
+              Check now
+            </button>
+            <button className="btn btn-small" disabled={busy} onClick={() => void run(api.signOut)}>
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   )
 }

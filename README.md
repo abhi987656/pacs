@@ -204,6 +204,18 @@ a second monitor if you have one)
 3. Windows may show "Windows protected your PC" because the app is not code-signed. Click
    **More info → Run anyway**.
 
+### Master and user software
+
+The release has two editions of the same app. **Personal PACS** (the user software) opens with
+**Sign in / Create account** (name, email and password, no email verification); a new account
+waits until it is approved. **Personal PACS Master** (`PersonalPACS-Master-Setup-*.exe`) signs in
+with your master account and has a **Users** page: the requests with name, email and computer,
+**Approve** (with how many computers the account may be used on), **Decline**, **Withdraw**, the
+computer limit, and **Remove computer**. Approved computers work offline for 7 days after their last
+check. Accounts live in your Supabase project – set it up once with
+[supabase/README.md](supabase/README.md) (the SQL, turning off email confirmation, your master
+account and the two GitHub secrets). Builds without those secrets have no sign-in.
+
 ### Install the phone app (Android 7 or newer)
 
 1. On your phone, open this repository on GitHub (signed in), go to **Releases → Android app – latest
@@ -329,6 +341,8 @@ npm run dev        # run with hot reload
 npm run typecheck
 npm run build      # production build into out/
 npm run dist:win   # Windows installer + portable exe into dist/ (run on Windows)
+npm run dist:win:master   # the master software (same, with PACS_EDITION=master)
+# Sign-in needs SUPABASE_URL and SUPABASE_ANON_KEY in the environment at build time.
 ```
 
 The Electron binary downloads on the first `npm run dev`.

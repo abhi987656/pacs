@@ -3,6 +3,7 @@ import type { Rectangle } from 'electron'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { APP_ORIGIN } from './protocol'
+import { APP_TITLE } from './access'
 
 interface WinState {
   bounds?: Rectangle
@@ -106,7 +107,7 @@ export function createMainWindow(): BrowserWindow {
     minWidth: 1000,
     minHeight: 640,
     show: false,
-    title: 'Personal PACS',
+    title: APP_TITLE,
     backgroundColor: '#000000',
     autoHideMenuBar: true,
     ...(st?.bounds && boundsVisible(st.bounds) ? st.bounds : {}),
